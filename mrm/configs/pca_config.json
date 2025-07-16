@@ -9,10 +9,10 @@
     "params": {
       "eid": "ebce500b-c530-47de-8cb1-963c552703ea",
       "alignment_event": "stimOn_times",
-      "pre_time": 0.5,
-      "post_time": 1.5,
+      "pre_time": 0.1,
+      "post_time": 0.3,
       "bin_size": 0.01,
-      "min_trial_length": 1.8,
+      "min_trial_length": 0.4,
       "val_fraction": 0.15,
       "test_fraction": 0.15,
       "random_seed": 42,
@@ -22,8 +22,28 @@
   "model": {
     "type": "pca",
     "params": {
-      "n_components": 32
+      "n_components": 32,
+      "fit_method": "trial_averaged"
     }
   },
-  "save_dir": "D:/multi_region/outputs"
+  "save_dir": "D:/multi_region/outputs",
+  "visualization": {
+    "splits": ["test", "val"],
+    "methods": ["pca", "tsne", "umap"],
+    "behavioral_signals": [
+      "choice",
+      "feedback_type", 
+      "stimulus_contrast_left",
+      "stimulus_contrast_right",
+      "reaction_time"
+    ],
+    "save_trajectories": true,
+    "max_trials_traj": 15,
+    "plot_settings": {
+      "dpi": 300,
+      "figsize": [10, 8],
+      "alpha": 0.7,
+      "point_size": 30
+    }
+  }
 }

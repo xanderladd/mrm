@@ -1,0 +1,29 @@
+{
+  "experiment": {
+    "name": "ibl_pca_analysis",
+    "session_id": "ebce500b-c530-47de-8cb1-963c552703ea",
+    "description": "PCA analysis of IBL session neural data"
+  },
+  "dataset": {
+    "type": "ibl", 
+    "params": {
+      "eid": "ebce500b-c530-47de-8cb1-963c552703ea",
+      "alignment_event": "stimOn_times",
+      "pre_time": 0.5,
+      "post_time": 1.5,
+      "bin_size": 0.01,
+      "min_trial_length": 1.8,
+      "val_fraction": 0.15,
+      "test_fraction": 0.15,
+      "random_seed": 42,
+      "use_cache": true
+    }
+  },
+  "model": {
+    "type": "pca",
+    "params": {
+      "n_components": 32
+    }
+  },
+  "save_dir": "D:/multi_region/outputs"
+}

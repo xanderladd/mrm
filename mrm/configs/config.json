@@ -1,0 +1,33 @@
+{
+  "experiment": {
+    "name": "ibl_analysis_v1",
+    "session_id": "ebce500b-c530-47de-8cb1-963c552703ea",
+    "description": "Analysis of IBL session with real neural data"
+  },
+  "dataset": {
+    "type": "ibl", 
+    "params": {
+      "eid": "ebce500b-c530-47de-8cb1-963c552703ea",
+      "alignment_event": "stimOn_times",
+      "pre_time": 0.5,
+      "post_time": 1.5,
+      "bin_size": 0.01,
+      "min_trial_length": 1.8,
+      "val_fraction": 0.15,
+      "test_fraction": 0.15,
+      "random_seed": 42
+    }
+  },
+  "model": {
+    "type": "lfads",
+    "params": {
+      "latent_dim": 32,
+      "hidden_dim": 128,
+      "dropout_rate": 0.1,
+      "learning_rate": 0.001,
+      "max_epochs": 200,
+      "batch_size": 32
+    }
+  },
+  "save_dir": "D:/multi_region/outputs"
+}

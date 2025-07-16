@@ -1,514 +1,586 @@
-# visualization/visualize_embeddings.py
+# visualize_embeddings.py
 """
-Embedding visualization for neural models with IBL data
+Visualize neural embeddings with mean trajectory plotting, scatter plots, and smoothing options
 """
 
-import os
 import json
+import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple, Union
-from sklearn.decomposition import PCA
-from sklearn.manifold import TSNE
+from scipy.ndimage import gaussian_filter1d
+from typing import Dict, List, Optional, Tuple, Union
 
-from mrm.dataset import IBLDataset
-from mrm.models.base import BaseModel
+# Import your existing framework components
 from mrm.trainer import load_trained_model
+from mrm.dataset import IBLDataset
 
 
-class EmbeddingVisualizer:
-    """Visualizer for neural embeddings with multiple dimensionality reduction techniques"""
+def create_scatter_plots(
+    embeddings: np.ndarray,
+    behavior_data: Dict[str, np.ndarray],
+    behavioral_signals: List[str],
+    splits: List[str],
+    output_dir: Path,
+    max_points_per_condition: int = 5000
+) -> Dict[str, plt.Figure]:
+    """
+    Create scatter plots showing all timepoints colored by behavioral condition
+    """
     
-    def __init__(self, model_dir: str, output_dir: Optional[str] = None):
-        """
-        Initialize visualizer
+    figures = {}
+    
+    for signal in behavioral_signals:
+        print(f"Creating scatter plot for {signal}...")
         
-        Args:
-            model_dir: Directory containing trained model
-            output_dir: Directory to save visualizations (default: model_dir/viz)
-        """
-        self.model_dir = Path(model_dir)
-        self.output_dir = Path(output_dir) if output_dir else self.model_dir / "viz"
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        # Create figure
+        n_splits = len(splits)
+        fig, axes = plt.subplots(1, n_splits, figsize=(8*n_splits, 6), squeeze=False)
+        axes = axes.flatten()
         
-        # Load model and configs
-        self.model = load_trained_model(str(self.model_dir))
-        
-        with open(self.model_dir / "training_config.json", 'r') as f:
-            self.training_config = json.load(f)
+        for split_idx, split in enumerate(splits):
+            ax = axes[split_idx]
             
-        with open(self.model_dir / "dataset_config.json", 'r') as f:
-            self.dataset_config = json.load(f)
+            # Get behavioral signal data
+            behavior_signal = behavior_data.get(signal, np.array([]))
             
-        with open(self.model_dir / "data_splits.json", 'r') as f:
-            self.splits = json.load(f)
-            
-        # Initialize dataset
-        self.dataset = IBLDataset(**self.dataset_config)
-        self.dataset.prepare()
-        
-        print(f"Loaded model from {self.model_dir}")
-        print(f"Visualizations will be saved to {self.output_dir}")
-        
-    def extract_embeddings(self, split: str = 'test') -> Tuple[np.ndarray, Dict[str, np.ndarray]]:
-        """
-        Extract embeddings and behavioral data for visualization
-        
-        Args:
-            split: Data split to use ('train', 'val', 'test')
-            
-        Returns:
-            embeddings: (n_trials, n_timepoints, embedding_dim)
-            behavior_data: Dict of behavioral signals
-        """
-        # Get neural data and encode to embeddings
-        neural_data = self.dataset.get_neural_data(split)
-        embeddings = self.model.encode(neural_data)
-        
-        # Get behavioral data for coloring
-        behavior_data = self.dataset.get_behavior_data(split)
-        
-        print(f"Extracted embeddings: {embeddings.shape}")
-        return embeddings, behavior_data
-        
-    def reduce_dimensionality(self, embeddings: np.ndarray, 
-                            method: str = 'pca',
-                            n_components: int = 2,
-                            **kwargs) -> np.ndarray:
-        """
-        Apply dimensionality reduction to embeddings
-        
-        Args:
-            embeddings: Input embeddings (n_samples, embedding_dim)
-            method: Reduction method ('pca')
-            n_components: Number of output dimensions
-            **kwargs: Additional arguments for the reduction method
-            
-        Returns:
-            reduced_embeddings: (n_samples, n_components)
-        """
-        if method == 'pca':
-            reducer = PCA(n_components=n_components, **kwargs)
-        else:
-            raise ValueError(f"Unknown reduction method: {method}")
-            
-        return reducer.fit_transform(embeddings)
-        
-    def create_behavioral_colormap(self, behavior_data: Dict[str, np.ndarray], 
-                                 signal_name: str) -> Tuple[np.ndarray, str, str]:
-        """
-        Create colormap based on behavioral signal
-        
-        Args:
-            behavior_data: Behavioral signals
-            signal_name: Which signal to use for coloring
-            
-        Returns:
-            colors: Color values for each trial
-            label: Label for colorbar
-            cmap: Colormap name
-        """
-        if signal_name not in behavior_data:
-            print(f"Warning: {signal_name} not found, using choice instead")
-            signal_name = 'choice'
-            
-        signal = behavior_data[signal_name]
-        
-        # Handle different signal types
-        if signal_name == 'choice':
-            # Categorical: left (-1), right (+1), no-go (0)
-            valid_mask = ~np.isnan(signal)
-            colors = np.full(len(signal), 0.5)  # Default gray
-            colors[valid_mask] = signal[valid_mask]
-            label = "Choice (L=-1, R=+1)"
-            cmap = 'RdBu_r'
-            
-        elif signal_name == 'feedback_type':
-            # Binary: correct (1), incorrect (-1)
-            valid_mask = ~np.isnan(signal)
-            colors = np.full(len(signal), 0.5)
-            colors[valid_mask] = signal[valid_mask]
-            label = "Feedback (Correct=1, Error=-1)"
-            cmap = 'RdYlGn'
-            
-        elif 'contrast' in signal_name:
-            # Continuous stimulus contrast
-            colors = np.abs(signal)
-            colors[np.isnan(colors)] = 0
-            label = f"{signal_name.replace('_', ' ').title()}"
-            cmap = 'viridis'
-            
-        elif signal_name == 'reaction_time':
-            # Continuous reaction time
-            colors = signal.copy()
-            # Handle outliers
-            valid_mask = ~np.isnan(colors)
-            if np.any(valid_mask):
-                p95 = np.percentile(colors[valid_mask], 95)
-                colors[colors > p95] = p95
-                colors[np.isnan(colors)] = np.median(colors[valid_mask])
-            label = "Reaction Time (s)"
-            cmap = 'plasma'
-            
-        else:
-            # Generic continuous signal
-            colors = signal.copy()
-            colors[np.isnan(colors)] = np.nanmedian(colors)
-            label = signal_name.replace('_', ' ').title()
-            cmap = 'viridis'
-            
-        return colors, label, cmap
-        
-    def plot_embedding_space(self, embeddings_2d: np.ndarray, 
-                           colors: np.ndarray,
-                           title: str,
-                           color_label: str,
-                           cmap: str,
-                           method: str = 'pca',
-                           trial_indices: Optional[np.ndarray] = None) -> plt.Figure:
-        """
-        Create embedding space visualization
-        
-        Args:
-            embeddings_2d: 2D embeddings to plot
-            colors: Color values for each point
-            title: Plot title
-            color_label: Label for colorbar
-            cmap: Colormap name
-            method: Dimensionality reduction method used
-            trial_indices: Optional trial indices for annotation
-            
-        Returns:
-            Figure object
-        """
-        fig, ax = plt.subplots(1, 1, figsize=(10, 8))
-        
-        scatter = ax.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], 
-                           c=colors, cmap=cmap, alpha=0.7, s=30)
-        
-        ax.set_xlabel(f'{method.upper()} 1')
-        ax.set_ylabel(f'{method.upper()} 2')
-        ax.set_title(title)
-        
-        # Add colorbar
-        cbar = plt.colorbar(scatter, ax=ax)
-        cbar.set_label(color_label)
-        
-        # Add trial annotations if requested (for small datasets)
-        if trial_indices is not None and len(trial_indices) < 50:
-            for i, trial_idx in enumerate(trial_indices):
-                ax.annotate(f'T{trial_idx}', (embeddings_2d[i, 0], embeddings_2d[i, 1]),
-                          xytext=(5, 5), textcoords='offset points', fontsize=8, alpha=0.7)
-        
-        plt.tight_layout()
-        return fig
-        
-    def plot_trajectory_embeddings(self, embeddings: np.ndarray,
-                                 behavior_data: Dict[str, np.ndarray],
-                                 signal_name: str = 'choice',
-                                 trial_indices: Optional[List[int]] = None,
-                                 max_trials: int = 20) -> plt.Figure:
-        """
-        Plot individual trial trajectories in embedding space
-        
-        Args:
-            embeddings: Full embeddings (n_trials, n_timepoints, embedding_dim)
-            behavior_data: Behavioral data for coloring
-            signal_name: Behavioral signal for coloring
-            trial_indices: Specific trials to plot (default: first max_trials)
-            max_trials: Maximum number of trials to plot
-            
-        Returns:
-            Figure object
-        """
-        if trial_indices is None:
-            trial_indices = list(range(min(max_trials, embeddings.shape[0])))
-        
-        colors, color_label, cmap = self.create_behavioral_colormap(behavior_data, signal_name)
-        
-        # Apply PCA to reduce to 2D for visualization
-        n_trials, n_timepoints, embed_dim = embeddings.shape
-        embeddings_flat = embeddings.reshape(-1, embed_dim)
-        embeddings_2d = self.reduce_dimensionality(embeddings_flat, 'pca', 2)
-        embeddings_2d = embeddings_2d.reshape(n_trials, n_timepoints, 2)
-        
-        fig, ax = plt.subplots(1, 1, figsize=(12, 10))
-        
-        # Plot each trial trajectory
-        for i, trial_idx in enumerate(trial_indices):
-            trial_traj = embeddings_2d[trial_idx]
-            trial_color = colors[trial_idx] if not np.isnan(colors[trial_idx]) else 0.5
-            
-            # Plot trajectory
-            ax.plot(trial_traj[:, 0], trial_traj[:, 1], alpha=0.6, linewidth=2,
-                   color=plt.cm.get_cmap(cmap)(0.5 + trial_color * 0.4))
-            
-            # Mark start and end
-            ax.scatter(trial_traj[0, 0], trial_traj[0, 1], 
-                      marker='o', s=100, alpha=0.8, 
-                      color=plt.cm.get_cmap(cmap)(0.5 + trial_color * 0.4),
-                      edgecolors='black', linewidth=1)
-            ax.scatter(trial_traj[-1, 0], trial_traj[-1, 1], 
-                      marker='s', s=100, alpha=0.8,
-                      color=plt.cm.get_cmap(cmap)(0.5 + trial_color * 0.4),
-                      edgecolors='black', linewidth=1)
-            
-            # Add trial number
-            ax.annotate(f'{trial_idx}', 
-                       (trial_traj[0, 0], trial_traj[0, 1]),
-                       xytext=(5, 5), textcoords='offset points', 
-                       fontsize=8, alpha=0.7)
-        
-        ax.set_xlabel('PC 1')
-        ax.set_ylabel('PC 2')
-        ax.set_title(f'Trial Trajectories in Embedding Space\n'
-                    f'Colored by {color_label} (○=start, □=end)')
-        
-        # Create custom legend
-        from matplotlib.lines import Line2D
-        legend_elements = [
-            Line2D([0], [0], marker='o', color='gray', linestyle='-', 
-                   markersize=8, alpha=0.7, label='Trial start'),
-            Line2D([0], [0], marker='s', color='gray', linestyle='-', 
-                   markersize=8, alpha=0.7, label='Trial end')
-        ]
-        ax.legend(handles=legend_elements, loc='upper right')
-        
-        plt.tight_layout()
-        return fig
-        
-    def visualize_embeddings(self, 
-                           split: str = 'test',
-                           methods: List[str] = ['pca', 'tsne', 'umap'],
-                           behavioral_signals: List[str] = ['choice', 'feedback_type', 'stimulus_contrast_left'],
-                           save_trajectories: bool = True,
-                           max_trials_traj: int = 20) -> Dict[str, plt.Figure]:
-        """
-        Create comprehensive embedding visualizations
-        
-        Args:
-            split: Data split to visualize
-            methods: Dimensionality reduction methods to use
-            behavioral_signals: Behavioral signals for coloring
-            save_trajectories: Whether to create trajectory plots
-            max_trials_traj: Max trials for trajectory visualization
-            
-        Returns:
-            Dictionary of figure objects
-        """
-        print(f"Creating embedding visualizations for {split} split...")
-        
-        # Extract embeddings and behavior
-        embeddings, behavior_data = self.extract_embeddings(split)
-        
-        # Flatten embeddings for dimensionality reduction
-        n_trials, n_timepoints, embed_dim = embeddings.shape
-        embeddings_flat = embeddings.reshape(-1, embed_dim)
-        
-        figures = {}
-        
-        # Create visualizations for each method and behavioral signal
-        for method in methods:
-            print(f"  Applying {method.upper()}...")
-            
-            try:
-                # Apply dimensionality reduction
-                if method == 'tsne' and embeddings_flat.shape[0] > 10000:
-                    # Subsample for t-SNE if too many points
-                    indices = np.random.choice(embeddings_flat.shape[0], 10000, replace=False)
-                    embeddings_2d = self.reduce_dimensionality(embeddings_flat[indices], method, 2)
-                    # Map back to trial structure (approximately)
-                    trial_indices = indices // n_timepoints
-                else:
-                    embeddings_2d = self.reduce_dimensionality(embeddings_flat, method, 2)
-                    trial_indices = np.arange(n_trials)
-                
-                for signal_name in behavioral_signals:
-                    if signal_name not in behavior_data:
-                        continue
-                        
-                    print(f"    Plotting {signal_name}...")
-                    
-                    # Create colors for this signal
-                    colors, color_label, cmap = self.create_behavioral_colormap(
-                        behavior_data, signal_name
-                    )
-                    
-                    # If we subsampled, adjust colors
-                    if method == 'tsne' and embeddings_flat.shape[0] > 10000:
-                        # Map colors to subsampled points
-                        colors_sub = np.array([colors[idx] for idx in trial_indices])
-                    else:
-                        # Repeat colors for each timepoint
-                        colors_sub = np.repeat(colors, n_timepoints)
-                    
-                    # Create plot
-                    title = f'{method.upper()} Visualization - {color_label}\n{split.title()} Set'
-                    fig = self.plot_embedding_space(
-                        embeddings_2d, colors_sub, title, color_label, cmap, method
-                    )
-                    
-                    figures[f'{method}_{signal_name}_{split}'] = fig
-                    
-            except Exception as e:
-                print(f"    Error with {method}: {e}")
+            if len(behavior_signal) == 0:
+                ax.text(0.5, 0.5, f'No {signal} data', ha='center', va='center', 
+                       transform=ax.transAxes)
                 continue
-        
-        # Create trajectory visualizations
-        if save_trajectories and n_timepoints > 1:
-            print("  Creating trajectory visualizations...")
             
-            for signal_name in behavioral_signals[:2]:  # Limit to avoid too many plots
-                if signal_name not in behavior_data:
+            # Group trials by behavioral condition
+            conditions, colors = get_behavioral_conditions(signal, behavior_signal)
+            
+            # Plot scatter points for each condition
+            for condition_name, condition_mask in conditions.items():
+                if not np.any(condition_mask):
+                    continue
+                
+                # Get all timepoints for this condition
+                condition_trials = np.where(condition_mask)[0]
+                
+                # Collect all timepoints from all trials in this condition
+                all_points = []
+                for trial_idx in condition_trials:
+                    trial_points = embeddings[trial_idx, :, :2]  # First 2 components
+                    all_points.append(trial_points)
+                
+                if len(all_points) == 0:
                     continue
                     
-                try:
-                    fig = self.plot_trajectory_embeddings(
-                        embeddings, behavior_data, signal_name, 
-                        max_trials=max_trials_traj
+                # Stack all points
+                condition_points = np.vstack(all_points)
+                
+                # Subsample if too many points for performance
+                if len(condition_points) > max_points_per_condition:
+                    subsample_idx = np.random.choice(
+                        len(condition_points), max_points_per_condition, replace=False
                     )
-                    figures[f'trajectories_{signal_name}_{split}'] = fig
-                except Exception as e:
-                    print(f"    Error creating trajectories for {signal_name}: {e}")
-        
-        print(f"Created {len(figures)} visualizations")
-        return figures
-        
-    def save_figures(self, figures: Dict[str, plt.Figure], dpi: int = 300):
-        """Save all figures to output directory"""
-        print(f"Saving {len(figures)} figures to {self.output_dir}")
-        
-        for name, fig in figures.items():
-            filepath = self.output_dir / f"{name}.png"
-            fig.savefig(filepath, dpi=dpi, bbox_inches='tight')
-            print(f"  Saved {filepath}")
+                    condition_points = condition_points[subsample_idx]
+                
+                color = colors.get(condition_name, '#1f77b4')
+                
+                # Plot scatter points
+                ax.scatter(condition_points[:, 0], condition_points[:, 1], 
+                          c=color, alpha=0.6, s=5, 
+                          label=f'{condition_name} (n={len(condition_trials)} trials)')
             
-        # Save summary info
-        summary = {
-            'dataset_config': self.dataset_config,
-            'model_type': self.training_config['model']['type'],
-            'experiment_name': self.training_config['experiment']['name'],
-            'n_figures': len(figures),
-            'figure_names': list(figures.keys())
-        }
+            # Formatting
+            ax.set_xlabel('PC 1')
+            ax.set_ylabel('PC 2')
+            ax.set_title(f'All Timepoints - {signal.replace("_", " ").title()}\n{split.title()} Set')
+            ax.grid(True, alpha=0.3)
+            ax.legend(markerscale=3)  # Make legend markers bigger
         
-        summary_path = self.output_dir / "visualization_summary.json"
-        with open(summary_path, 'w') as f:
-            json.dump(summary, f, indent=2)
-            
-        print(f"Saved summary to {summary_path}")
+        plt.tight_layout()
+        figures[f"scatter_{signal}"] = fig
         
-    def run_full_visualization(self, 
-                             splits: List[str] = ['test'],
-                             methods: List[str] = ['pca', 'tsne', 'umap'],
-                             behavioral_signals: List[str] = ['choice', 'feedback_type', 'stimulus_contrast_left'],
-                             save_trajectories: bool = True, **kwargs) -> Dict[str, plt.Figure]:
-        """
-        Run complete visualization pipeline
-        
-        Args:
-            splits: Data splits to visualize
-            methods: Dimensionality reduction methods
-            behavioral_signals: Behavioral signals for coloring
-            save_trajectories: Whether to include trajectory plots
-            
-        Returns:
-            All generated figures
-        """
-        all_figures = {}
-        
-        for split in splits:
-            print(f"\nProcessing {split} split...")
-            figures = self.visualize_embeddings(
-                split=split,
-                methods=methods,
-                behavioral_signals=behavioral_signals,
-                save_trajectories=save_trajectories
-            )
-            all_figures.update(figures)
-        
-        # Save all figures
-        self.save_figures(all_figures)
-        
-        return all_figures
-
-
-def visualize_from_config(config_path: str, 
-                         model_dir: Optional[str] = None,
-                         output_dir: Optional[str] = None) -> Dict[str, plt.Figure]:
-    """
-    Create visualizations from a configuration file
+        # Save figure
+        save_path = output_dir / f"scatter_plot_{signal}.png"
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved to {save_path}")
     
-    Args:
-        config_path: Path to config JSON (with visualization block)
-        model_dir: Override model directory from config
-        output_dir: Override output directory
-        
-    Returns:
-        Generated figures
+    return figures
+
+
+def create_mean_trajectory_plots(
+    embeddings: np.ndarray,
+    behavior_data: Dict[str, np.ndarray],
+    time_info: Dict,
+    behavioral_signals: List[str],
+    splits: List[str],
+    output_dir: Path,
+    smoothing_sigma: Optional[float] = 1.0,
+    temporal_smoothing: Optional[float] = None,
+    confidence_intervals: bool = True,
+    max_trials_per_condition: int = 100
+) -> Dict[str, plt.Figure]:
     """
+    Create mean trajectory plots integrated with existing framework
+    """
+    
+    figures = {}
+    
+    for signal in behavioral_signals:
+        print(f"Creating mean trajectory plot for {signal}...")
+        
+        # Create figure
+        n_splits = len(splits)
+        fig, axes = plt.subplots(1, n_splits, figsize=(8*n_splits, 6), squeeze=False)
+        axes = axes.flatten()
+        
+        for split_idx, split in enumerate(splits):
+            ax = axes[split_idx]
+            
+            # Get behavioral signal data
+            behavior_signal = behavior_data.get(signal, np.array([]))
+            
+            if len(behavior_signal) == 0:
+                ax.text(0.5, 0.5, f'No {signal} data', ha='center', va='center', 
+                       transform=ax.transAxes)
+                continue
+            
+            # Group trials by behavioral condition
+            conditions, colors = get_behavioral_conditions(signal, behavior_signal)
+            
+            # Plot mean trajectories for each condition
+            for condition_name, condition_mask in conditions.items():
+                if not np.any(condition_mask):
+                    continue
+                
+                # Subsample trials if too many
+                trial_indices = np.where(condition_mask)[0]
+                if len(trial_indices) > max_trials_per_condition:
+                    trial_indices = np.random.choice(
+                        trial_indices, max_trials_per_condition, replace=False
+                    )
+                    condition_mask = np.zeros_like(condition_mask)
+                    condition_mask[trial_indices] = True
+                
+                # Get trajectories for this condition (first 2 components only)
+                condition_trajectories = embeddings[condition_mask, :, :2]
+                
+                if len(condition_trajectories) == 0:
+                    continue
+                
+                # Apply temporal smoothing if requested
+                if temporal_smoothing is not None:
+                    smoothed_trajectories = np.zeros_like(condition_trajectories)
+                    for trial in range(len(condition_trajectories)):
+                        for dim in range(2):
+                            smoothed_trajectories[trial, :, dim] = gaussian_filter1d(
+                                condition_trajectories[trial, :, dim], 
+                                sigma=temporal_smoothing
+                            )
+                    condition_trajectories = smoothed_trajectories
+                
+                # Calculate mean trajectory
+                mean_trajectory = np.mean(condition_trajectories, axis=0)
+                
+                # Apply spatial smoothing if requested
+                if smoothing_sigma is not None:
+                    for dim in range(2):
+                        mean_trajectory[:, dim] = gaussian_filter1d(
+                            mean_trajectory[:, dim], 
+                            sigma=smoothing_sigma
+                        )
+                
+                # Plot mean trajectory
+                color = colors.get(condition_name, '#1f77b4')
+                ax.plot(mean_trajectory[:, 0], mean_trajectory[:, 1], 
+                       color=color, linewidth=3, 
+                       label=f'{condition_name} (n={np.sum(condition_mask)})',
+                       alpha=0.9)
+                
+                # Add confidence intervals if requested
+                if confidence_intervals and len(condition_trajectories) > 1:
+                    std_trajectory = np.std(condition_trajectories, axis=0)
+                    
+                    # Apply same spatial smoothing to std
+                    if smoothing_sigma is not None:
+                        for dim in range(2):
+                            std_trajectory[:, dim] = gaussian_filter1d(
+                                std_trajectory[:, dim], 
+                                sigma=smoothing_sigma
+                            )
+                    
+                    # Create confidence band
+                    ax.fill_between(
+                        mean_trajectory[:, 0],
+                        mean_trajectory[:, 1] - std_trajectory[:, 1],
+                        mean_trajectory[:, 1] + std_trajectory[:, 1],
+                        color=color, alpha=0.2
+                    )
+                
+                # Mark start and end points
+                ax.scatter(mean_trajectory[0, 0], mean_trajectory[0, 1], 
+                          color=color, s=150, marker='o', edgecolor='black', 
+                          linewidth=2, zorder=10)
+                ax.scatter(mean_trajectory[-1, 0], mean_trajectory[-1, 1], 
+                          color=color, s=150, marker='s', edgecolor='black', 
+                          linewidth=2, zorder=10)
+            
+            
+            # Formatting
+            ax.set_xlabel('PC 1')
+            ax.set_ylabel('PC 2')
+            ax.set_title(f'Mean Trajectories - {signal.replace("_", " ").title()}\n{split.title()} Set')
+            ax.grid(True, alpha=0.3)
+            ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        plt.tight_layout()
+        figures[signal] = fig
+        
+        # Save figure
+        save_path = output_dir / f"mean_trajectories_{signal}.png"
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved to {save_path}")
+    
+    return figures
+
+
+def create_individual_trajectory_plots(
+    embeddings: np.ndarray,
+    behavior_data: Dict[str, np.ndarray],
+    behavioral_signals: List[str],
+    splits: List[str],
+    output_dir: Path,
+    max_trials_traj: int = 15
+) -> Dict[str, plt.Figure]:
+    """
+    Create individual trajectory plots
+    """
+    
+    figures = {}
+    
+    for signal in behavioral_signals:
+        print(f"Creating individual trajectory plot for {signal}...")
+        
+        # Create figure
+        n_splits = len(splits)
+        fig, axes = plt.subplots(1, n_splits, figsize=(8*n_splits, 6), squeeze=False)
+        axes = axes.flatten()
+        
+        for split_idx, split in enumerate(splits):
+            ax = axes[split_idx]
+            
+            # Get behavioral signal data
+            behavior_signal = behavior_data.get(signal, np.array([]))
+            
+            if len(behavior_signal) == 0:
+                ax.text(0.5, 0.5, f'No {signal} data', ha='center', va='center', 
+                       transform=ax.transAxes)
+                continue
+            
+            # Group trials by behavioral condition
+            conditions, colors = get_behavioral_conditions(signal, behavior_signal)
+            
+            # Plot individual trajectories for each condition
+            for condition_name, condition_mask in conditions.items():
+                if not np.any(condition_mask):
+                    continue
+                
+                # Get trial indices for this condition
+                trial_indices = np.where(condition_mask)[0]
+                n_trials_to_plot = min(len(trial_indices), max_trials_traj)
+                
+                if n_trials_to_plot > len(trial_indices):
+                    selected_trials = trial_indices
+                else:
+                    selected_trials = np.random.choice(trial_indices, n_trials_to_plot, replace=False)
+                
+                color = colors.get(condition_name, '#1f77b4')
+                
+                # Plot individual trajectories
+                for i, trial_idx in enumerate(selected_trials):
+                    traj = embeddings[trial_idx, :, :2]  # First 2 components
+                    
+                    alpha = 0.7 if i == 0 else 0.4  # First trajectory more visible
+                    label = condition_name if i == 0 else None
+                    
+                    ax.plot(traj[:, 0], traj[:, 1], color=color, alpha=alpha, 
+                           linewidth=1.5, label=label)
+                    
+                    # Mark start and end
+                    ax.scatter(traj[0, 0], traj[0, 1], color=color, s=30, 
+                              marker='o', edgecolor='black', linewidth=1, alpha=0.8)
+                    ax.scatter(traj[-1, 0], traj[-1, 1], color=color, s=30, 
+                              marker='s', edgecolor='black', linewidth=1, alpha=0.8)
+            
+            # Formatting
+            ax.set_xlabel('PC 1')
+            ax.set_ylabel('PC 2')
+            ax.set_title(f'Individual Trajectories - {signal.replace("_", " ").title()}\n{split.title()} Set')
+            ax.grid(True, alpha=0.3)
+            ax.legend()
+        
+        plt.tight_layout()
+        figures[f"individual_{signal}"] = fig
+        
+        # Save figure
+        save_path = output_dir / f"individual_trajectories_{signal}.png"
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Saved to {save_path}")
+    
+    return figures
+
+
+def get_behavioral_conditions(signal: str, behavior_signal: np.ndarray) -> Tuple[Dict, Dict]:
+    """Get conditions and colors for a behavioral signal"""
+    
+    if signal == 'choice':
+        conditions = {
+            'Left Choice': behavior_signal == -1,
+            'Right Choice': behavior_signal == 1
+        }
+        colors = {'Left Choice': '#1f77b4', 'Right Choice': '#ff7f0e'}
+        
+    elif signal == 'feedback_type':
+        conditions = {
+            'Correct': behavior_signal == 1,
+            'Error': behavior_signal == -1
+        }
+        colors = {'Correct': '#2ca02c', 'Error': '#d62728'}
+        
+    elif 'contrast' in signal:
+        # Handle contrast signals
+        valid_mask = ~np.isnan(behavior_signal)
+        if np.any(valid_mask):
+            contrast_vals = behavior_signal[valid_mask]
+            unique_vals = np.unique(contrast_vals)
+            
+            if len(unique_vals) > 4:
+                # Bin continuous values
+                percentiles = np.percentile(contrast_vals[contrast_vals > 0], [50]) if np.any(contrast_vals > 0) else [0]
+                conditions = {
+                    'Low Contrast': (behavior_signal > 0) & (behavior_signal <= percentiles[0]),
+                    'High Contrast': behavior_signal > percentiles[0],
+                    'No Stimulus': behavior_signal == 0
+                }
+            else:
+                # Use discrete values
+                conditions = {f'Contrast {val:.2f}': behavior_signal == val for val in unique_vals}
+                
+            colors = {cond: plt.cm.viridis(i/len(conditions)) for i, cond in enumerate(conditions.keys())}
+        else:
+            conditions = {'All': np.ones(len(behavior_signal), dtype=bool)}
+            colors = {'All': '#1f77b4'}
+            
+    elif signal == 'reaction_time':
+        # Bin reaction times
+        valid_mask = ~np.isnan(behavior_signal)
+        if np.any(valid_mask):
+            rt_vals = behavior_signal[valid_mask]
+            percentiles = np.percentile(rt_vals, [33, 67])
+            conditions = {
+                'Fast RT': behavior_signal <= percentiles[0],
+                'Medium RT': (behavior_signal > percentiles[0]) & (behavior_signal <= percentiles[1]),
+                'Slow RT': behavior_signal > percentiles[1]
+            }
+            colors = {'Fast RT': '#440154', 'Medium RT': '#21908c', 'Slow RT': '#fde725'}
+        else:
+            conditions = {'All': np.ones(len(behavior_signal), dtype=bool)}
+            colors = {'All': '#1f77b4'}
+    else:
+        # Default case
+        conditions = {'All': np.ones(len(behavior_signal), dtype=bool)}
+        colors = {'All': '#1f77b4'}
+        
+    return conditions, colors
+
+
+
+def visualize_embeddings(config_path: str):
+    """
+    Create visualization plots from trained model
+    """
+    
+    # Load configuration
     with open(config_path, 'r') as f:
         config = json.load(f)
     
-    # Determine model directory from config
-    if model_dir is None:
-        # Build model directory from config structure
-        save_dir = config.get('save_dir', 'outputs')
-        experiment_name = config['experiment']['name']
-        session_id = config['experiment']['session_id']
-        model_type = config['model']['type']
-        
-        model_dir = os.path.join(save_dir, experiment_name, session_id, model_type)
+    # Extract paths and settings
+    experiment_name = config['experiment']['name']
+    session_id = config['experiment']['session_id']
+    model_type = config['model']['type']
+    save_dir = config.get('save_dir', 'outputs')
     
-    if not os.path.exists(model_dir):
-        raise ValueError(f"Model directory not found: {model_dir}")
-    
-    print(f"Using model directory: {model_dir}")
-    
-    # Create visualizer
-    visualizer = EmbeddingVisualizer(model_dir, output_dir)
-    
-    # Get visualization parameters from config
+    # Load visualization config
     viz_config = config.get('visualization', {})
+    splits = viz_config.get('splits', ['test', 'val'])
+    behavioral_signals = viz_config.get('behavioral_signals', [
+        'choice', 'feedback_type', 'stimulus_contrast_left', 
+        'stimulus_contrast_right', 'reaction_time'
+    ])
     
-    # Extract parameters with defaults
-    viz_params = {
-        'splits': viz_config.get('splits', ['test']),
-        'methods': viz_config.get('methods', ['pca', 'tsne']),
-        'behavioral_signals': viz_config.get('behavioral_signals', ['choice', 'feedback_type']),
-        'save_trajectories': viz_config.get('save_trajectories', True),
-        'max_trials_traj': viz_config.get('max_trials_traj', 20)
+    # Visualization parameters
+    smoothing_sigma = viz_config.get('smoothing_sigma', 1.0)
+    temporal_smoothing = viz_config.get('temporal_smoothing', None)
+    confidence_intervals = viz_config.get('confidence_intervals', True)
+    
+    # Construct paths
+    model_dir = Path(save_dir) / experiment_name / session_id / model_type
+    output_dir = model_dir / "visualizations"
+    output_dir.mkdir(exist_ok=True)
+    
+    print(f"Loading model from: {model_dir}")
+    print(f"Output directory: {output_dir}")
+    
+    # Load trained model
+    model = load_trained_model(str(model_dir))
+    
+    # Load dataset
+    dataset_config = config['dataset']
+    if dataset_config['type'] == 'ibl':
+        dataset = IBLDataset(**dataset_config['params'])
+        dataset.prepare()
+    else:
+        raise ValueError(f"Unknown dataset type: {dataset_config['type']}")
+    
+    print("Creating visualizations...")
+    
+    all_figures = {}
+    
+    # Process each split
+    for split in splits:
+        print(f"\nProcessing {split} split...")
+        
+        # Get data
+        neural_data = dataset.get_neural_data(split)
+        behavior_data = dataset.get_behavior_data(split)
+
+        # Check the behavioral correlation
+        choices = behavior_data['choice']  # -1=left, 1=right
+        feedback = behavior_data['feedback_type']  # -1=error, 1=correct
+
+        # Calculate correlation
+        correlation = np.corrcoef(choices, feedback)[0,1]
+        print(f"Choice-Feedback correlation: {correlation}")
+
+        # Crosstab analysis
+        left_correct = np.sum((choices == -1) & (feedback == 1))
+        left_error = np.sum((choices == -1) & (feedback == -1))
+        right_correct = np.sum((choices == 1) & (feedback == 1))
+        right_error = np.sum((choices == 1) & (feedback == -1))
+
+        print(f"Left-Correct: {left_correct}, Left-Error: {left_error}")
+        print(f"Right-Correct: {right_correct}, Right-Error: {right_error}")
+        
+        time_info = dataset.get_time_info(split)
+        
+        # Get embeddings
+        embeddings = model.encode(neural_data)
+        print(f"Embeddings shape: {embeddings.shape}")
+        
+        # Ensure embeddings are in trial format (n_trials, n_timepoints, n_dims)
+        if len(embeddings.shape) == 2:
+            n_trials = neural_data.shape[0]
+            n_timepoints = neural_data.shape[1]
+            n_dims = embeddings.shape[1]
+            embeddings = embeddings.reshape(n_trials, n_timepoints, n_dims)
+        
+        # Create split-specific output directory
+        split_output_dir = output_dir / split
+        split_output_dir.mkdir(exist_ok=True)
+        
+        # Create scatter plots
+        print(f"Creating scatter plots for {split}...")
+        scatter_figures = create_scatter_plots(
+            embeddings=embeddings,
+            behavior_data=behavior_data,
+            behavioral_signals=behavioral_signals,
+            splits=[split],
+            output_dir=split_output_dir,
+            max_points_per_condition=10000
+        )
+        all_figures.update({f"{split}_{k}": v for k, v in scatter_figures.items()})
+        
+        # Create mean trajectory plots
+        print(f"Creating mean trajectory plots for {split}...")
+        mean_figures = create_mean_trajectory_plots(
+            embeddings=embeddings,
+            behavior_data=behavior_data,
+            time_info=time_info,
+            behavioral_signals=behavioral_signals,
+            splits=[split],
+            output_dir=split_output_dir,
+            smoothing_sigma=smoothing_sigma,
+            temporal_smoothing=temporal_smoothing,
+            confidence_intervals=confidence_intervals
+        )
+        all_figures.update({f"{split}_{k}": v for k, v in mean_figures.items()})
+        
+        # Create individual trajectory plots (optional)
+        if viz_config.get('save_trajectories', False):
+            print(f"Creating individual trajectory plots for {split}...")
+            max_trials_traj = viz_config.get('max_trials_traj', 15)
+            individual_figures = create_individual_trajectory_plots(
+                embeddings=embeddings,
+                behavior_data=behavior_data,
+                behavioral_signals=behavioral_signals,
+                splits=[split],
+                output_dir=split_output_dir,
+                max_trials_traj=max_trials_traj
+            )
+            all_figures.update({f"{split}_{k}": v for k, v in individual_figures.items()})
+        
+        # Close figures to save memory
+        for fig_dict in [scatter_figures, mean_figures]:
+            for fig in fig_dict.values():
+                plt.close(fig)
+        
+        if viz_config.get('save_trajectories', False):
+            for fig in individual_figures.values():
+                plt.close(fig)
+    
+    # Save summary
+    summary_path = output_dir / "visualization_summary.json"
+    summary_data = {
+        "model_type": model_type,
+        "dataset_config": dataset_config,
+        "visualization_config": viz_config,
+        "figures_created": list(all_figures.keys()),
+        "splits_processed": splits,
+        "behavioral_signals": behavioral_signals
     }
     
-    print(f"Visualization parameters: {viz_params}")
+    with open(summary_path, 'w') as f:
+        json.dump(summary_data, f, indent=2)
     
-    # Run visualization
-    return visualizer.run_full_visualization(**viz_params)
+    print(f"\nVisualization complete! Created {len(all_figures)} figures.")
+    print(f"Summary saved to {summary_path}")
+    
+    return all_figures
 
 
-if __name__ == "__main__":
-    import sys
+def main():
+    """Main function to run visualization"""
     
-    if len(sys.argv) < 2:
-        print("Usage: python visualize_embeddings.py <config.json>")
-        print("Example: python visualization/visualize_embeddings.py ../configs/pca_config.json")
+    if len(sys.argv) != 2:
+        print("Usage: python visualize_embeddings.py <config_file.json>")
+        print("Example: python visualize_embeddings.py ../configs/pca_config.json")
         sys.exit(1)
     
     config_path = sys.argv[1]
     
-    if not os.path.exists(config_path):
+    if not Path(config_path).exists():
         print(f"Config file not found: {config_path}")
         sys.exit(1)
     
-    print(f"Creating visualizations from config: {config_path}")
+    print(f"Running visualization with config: {config_path}")
     
     try:
-        figures = visualize_from_config(config_path)
-        print(f"\n✅ Visualization complete! Generated {len(figures)} plots.")
+        visualize_embeddings(config_path)
+        print(f"\n✅ Visualization completed successfully!")
+        
     except Exception as e:
         print(f"\n❌ Visualization failed: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

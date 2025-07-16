@@ -12,6 +12,7 @@ from mrm.dataset import NeuralDataset
 from mrm.models.dummy import DummyModel
 from mrm.models.pca import PCAModel
 from mrm.models.base import BaseModel
+from mrm.models.lfads import LFADSModel
 
 
 class NeuralTrainer:
@@ -26,7 +27,7 @@ class NeuralTrainer:
         self.register_model('dummy', DummyModel)
         self.register_model('pca', PCAModel)
         # TODO: Register actual models when implemented
-        # self.register_model('lfads', LFADSModel)
+        self.register_model('lfads', LFADSModel)
         # self.register_model('ssm', SSMModel)
         # self.register_model('gnode', GNODEModel)
         

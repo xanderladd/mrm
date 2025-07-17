@@ -1,6 +1,6 @@
 {
   "experiment": {
-    "name": "ibl_lfads_analysis",
+    "name": "ibl_lfads_analysis_test",
     "session_id": "ebce500b-c530-47de-8cb1-963c552703ea",
     "description": "LFADS analysis of IBL session with behavioral context"
   },
@@ -9,10 +9,10 @@
     "params": {
       "eid": "ebce500b-c530-47de-8cb1-963c552703ea",
       "alignment_event": "stimOn_times",
-      "pre_time": 0.5,
-      "post_time": 1.5,
+      "pre_time": 0.1,
+      "post_time": 0.4,
       "bin_size": 0.01,
-      "min_trial_length": 1.8,
+      "min_trial_length": 0.5,
       "val_fraction": 0.15,
       "test_fraction": 0.15,
       "random_seed": 42,
@@ -30,11 +30,7 @@
       "learning_rate": 0.007,
       "max_epochs": 10,
       "batch_size": 32,
-      "external_inputs": [
-        "choice",
-        "stimulus_contrast", 
-        "movement_onset"
-      ],
+      "external_inputs": [],
       "reconstruction_type": "poisson",
       "dropout_rate": 0.1,
       "kl_start_epoch": 0,

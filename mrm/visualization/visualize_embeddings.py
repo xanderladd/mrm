@@ -61,6 +61,7 @@ def create_scatter_plots(
                 # Get all timepoints for this condition
                 condition_trials = np.where(condition_mask)[0]
                 
+                
                 # Collect all timepoints from all trials in this condition
                 all_points = []
                 for trial_idx in condition_trials:
@@ -450,7 +451,7 @@ def visualize_embeddings(config_path: str):
         # Get data
         neural_data = dataset.get_neural_data(split)
         behavior_data = dataset.get_behavior_data(split)
-
+       
         # Check the behavioral correlation
         choices = behavior_data['choice']  # -1=left, 1=right
         feedback = behavior_data['feedback_type']  # -1=error, 1=correct
@@ -458,6 +459,7 @@ def visualize_embeddings(config_path: str):
         # Calculate correlation
         correlation = np.corrcoef(choices, feedback)[0,1]
         print(f"Choice-Feedback correlation: {correlation}")
+    
 
         # Crosstab analysis
         left_correct = np.sum((choices == -1) & (feedback == 1))
@@ -473,6 +475,7 @@ def visualize_embeddings(config_path: str):
         # Get embeddings
         embeddings = model.encode(neural_data)
         print(f"Embeddings shape: {embeddings.shape}")
+        
         
         # Ensure embeddings are in trial format (n_trials, n_timepoints, n_dims)
         if len(embeddings.shape) == 2:

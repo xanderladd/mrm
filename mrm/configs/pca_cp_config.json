@@ -1,0 +1,51 @@
+{
+  "experiment": {
+    "name": "ibl_pca_analysis",
+    "session_id": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe",
+    "description": "PCA analysis of IBL session neural data with mean trajectories"
+  },
+  "dataset": {
+    "type": "ibl", 
+    "params": {
+      "eid": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe",
+      "probe_selection": ["alf/probe01/pykilosort"],
+      "alignment_event": "stimOn_times",
+      "pre_time": 0.1,
+      "post_time": 0.2,
+      "bin_size": 0.005,
+      "min_trial_length": 0.3,
+      "val_fraction": 0.15,
+      "test_fraction": 0.15,
+      "random_seed": 42,
+      "use_cache": true
+    }
+  },
+  "model": {
+    "type": "pca",
+    "params": {
+      "n_components": 32,
+      "fit_method": "trial_averaged"
+    }
+  },
+  "save_dir": "D:/multi_region/outputs",
+  "visualization": {
+    "splits": ["test", "val"],
+    "behavioral_signals": [
+      "choice",
+      "feedback_type", 
+      "stimulus_contrast_left",
+      "stimulus_contrast_right",
+      "reaction_time"
+    ],
+    "smoothing_sigma": 1.0,
+    "temporal_smoothing": 0.5,
+    "confidence_intervals": true,
+    "max_trials_per_condition": 100,
+    "plot_settings": {
+      "dpi": 300,
+      "figsize": [10, 8],
+      "alpha": 0.7,
+      "point_size": 30
+    }
+  }
+}

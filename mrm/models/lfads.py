@@ -89,7 +89,7 @@ class LFADSModel(BaseModel):
         self.learning_rate = learning_rate
         self.max_epochs = max_epochs
         self.batch_size = batch_size
-        self.external_inputs = external_inputs or ['choice', 'stimulus_contrast', 'movement_onset']
+        self.external_inputs = external_inputs
         self.reconstruction_type = reconstruction_type
         self.dropout_rate = dropout_rate
         self.kl_start_epoch = kl_start_epoch
@@ -138,6 +138,23 @@ class LFADSModel(BaseModel):
             # Train model
             print(f"Training for {self.max_epochs} epochs...")
             trainer.fit(self.lfads_model, datamodule=datamodule)
+            
+            import pandas as pd
+            metrics_file = os.path.join(temp_dir, "lfads_training", "version_0", "metrics.csv")
+            if os.path.exists(metrics_file):
+                df = pd.read_csv(metrics_file)
+                # Store as instance variable
+                self.training_history = {}
+                for col in df.columns:
+                    data = df[col].dropna()
+                    if len(data) > 0:
+                        self.training_history[col] = data.tolist()
+                print(f"Captured {len(self.training_history)} training metrics")
+            else:
+                print("No training metrics found")
+                self.training_history = {}
+            
+            # ===== END ADD =====
         
         self.is_fitted = True
         print("LFADS training completed!")
@@ -267,6 +284,55 @@ class LFADSModel(BaseModel):
             
         with open(filepath, 'wb') as f:
             pickle.dump(save_data, f)
+
+        # ===== ADD: Save loss curves =====
+        if hasattr(self, 'training_history') and self.training_history:
+            try:
+                import matplotlib.pyplot as plt
+                import json
+                from pathlib import Path
+                
+                # Get directory from filepath
+                save_dir = Path(filepath).parent
+                
+                # Save raw training data as JSON
+                history_file = save_dir / "training_history.json"
+                with open(history_file, 'w') as f:
+                    json.dump(self.training_history, f, indent=2)
+                
+                # Create loss curve plots
+                loss_cols = [col for col in self.training_history.keys() if 'loss' in col.lower()]
+                if loss_cols:
+                    n_plots = min(len(loss_cols), 4)
+                    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+                    axes = axes.flatten()
+                    
+                    for i, col in enumerate(loss_cols[:4]):
+                        ax = axes[i]
+                        data = self.training_history[col]
+                        ax.plot(data)
+                        ax.set_title(col)
+                        ax.set_xlabel('Step')
+                        ax.grid(True, alpha=0.3)
+                        
+                        # Log scale for loss curves
+                        if len(data) > 0 and max(data) > 0:
+                            ax.set_yscale('log')
+                    
+                    # Hide unused subplots
+                    for i in range(len(loss_cols), 4):
+                        axes[i].set_visible(False)
+                    
+                    plt.tight_layout()
+                    curves_file = save_dir / "training_curves.png"
+                    plt.savefig(curves_file, dpi=150, bbox_inches='tight')
+                    plt.close()
+                    
+                    print(f"✓ Saved training curves: {curves_file}")
+                
+            except Exception as e:
+                print(f"Warning: Could not save training curves: {e}")
+        # ===== END ADD =====
             
     @classmethod
     def load(cls, filepath: str) -> 'LFADSModel':
@@ -318,12 +384,11 @@ class LFADSModel(BaseModel):
         train_behavior = dataset.get_behavior_data('train')
         val_behavior = dataset.get_behavior_data('val')
         test_behavior = dataset.get_behavior_data('test')
-        
         # Extract external inputs
         train_ext = self._extract_external_inputs(train_behavior, train_neural.shape[:2])
         val_ext = self._extract_external_inputs(val_behavior, val_neural.shape[:2])
         test_ext = self._extract_external_inputs(test_behavior, test_neural.shape[:2])
-        
+
         # Store data info
         data_info = {
             'n_neurons': train_neural.shape[2],
@@ -337,7 +402,6 @@ class LFADSModel(BaseModel):
         # Create temporary HDF5 file
         temp_dir = tempfile.gettempdir()
         h5_path = os.path.join(temp_dir, f'lfads_data_{os.getpid()}.h5')
-        
         with h5py.File(h5_path, 'w') as f:
             # Training data
             f['train_encod_data'] = train_neural
@@ -388,6 +452,20 @@ class LFADSModel(BaseModel):
                 
                 ext_inputs[:, :, i] = contrast[:, np.newaxis]
                 
+            elif input_name == 'cue':
+                # Cue signal indicating stimulus side: -1 for left, +1 for right, 0 for no stimulus
+                left_contrast = behavior_data.get('stimulus_contrast_left', np.zeros(n_trials))
+                right_contrast = behavior_data.get('stimulus_contrast_right', np.zeros(n_trials))
+                
+                cue = np.zeros(n_trials)
+                left_mask = ~np.isnan(left_contrast) & (left_contrast >= 0)  # Include 0 contrast
+                right_mask = ~np.isnan(right_contrast) & (right_contrast >= 0)
+                
+                cue[left_mask] = -1.0
+                cue[right_mask] = 1.0
+                
+                ext_inputs[:, :, i] = cue[:, np.newaxis]
+                
             elif input_name == 'movement_onset':
                 # Binary signal for movement onset (simplified)
                 reaction_time = behavior_data.get('reaction_time', np.full(n_trials, np.nan))
@@ -399,7 +477,7 @@ class LFADSModel(BaseModel):
                         # Assume stimulus onset at middle of trial
                         stim_onset_bin = n_timepoints // 2
                         movement_bin = min(n_timepoints - 1, 
-                                         int(stim_onset_bin + reaction_time[trial] * 100))  # Assuming 10ms bins
+                                        int(stim_onset_bin + reaction_time[trial] * 100))  # Assuming 10ms bins
                         movement_signal[trial, movement_bin] = 1.0
                         
                 ext_inputs[:, :, i] = movement_signal
@@ -487,8 +565,8 @@ class LFADSModel(BaseModel):
             # KL regularization
             kl_start_epoch=self.kl_start_epoch,
             kl_increase_epoch=self.kl_increase_epoch,
-            kl_ic_scale=1.0,
-            kl_co_scale=1.0,
+            kl_ic_scale=0.0,
+            kl_co_scale=0.0,
         )
         
         return model

@@ -78,7 +78,6 @@ class NeuralDataset(ABC):
 
 class IBLDataset(NeuralDataset):
     """IBL-specific dataset implementation with event alignment"""
-    
     def __init__(self, config_path: str = None, **kwargs):
         """
         Initialize IBL Dataset
@@ -89,6 +88,7 @@ class IBLDataset(NeuralDataset):
             cache_dir: Directory for cached data (default "D://multi_region//ibl/")
             **kwargs: Direct parameters (override config file)
                 Required: eid (IBL session ID)
+                Optional: probe_selection (str, list, or None)
         """
         super().__init__()
         
@@ -118,6 +118,9 @@ class IBLDataset(NeuralDataset):
         self.test_fraction = config.get('test_fraction', 0.15)
         self.random_seed = config.get('random_seed', 42)
         
+        # NEW: Handle probe selection
+        self.probe_selection = config.get('probe_selection', None)
+        
         # Cache settings
         self.use_cache = config.get('use_cache', True)
         self.cache_dir = config.get("cache_dir",  "D://multi_region//ibl/")
@@ -128,7 +131,7 @@ class IBLDataset(NeuralDataset):
         self.trial_info = {}  # split -> pd.DataFrame
         self.time_info = {}  # split -> Dict
         self.valid_trials = {}  # split -> List[int] (original trial indices)
-        
+    
     def _get_cache_path(self):
         """Get path for cached data"""
         cache_path = os.path.join(self.cache_dir, self.eid)
@@ -255,35 +258,76 @@ class IBLDataset(NeuralDataset):
         n_trials_raw = len(trials.intervals)
         print(f"    Loaded {n_trials_raw} trials")
         
-        # Load neural data 
+        # Handle probe selection logic
         print("  Loading neural data...")
-        spikes = one.load_object(self.eid, 'spikes')
-        clusters = one.load_object(self.eid, 'clusters')
+        
+        # Parse probe specification from config
+        probe_spec = getattr(self, 'probe_selection', None)
+        
+        if probe_spec is None:
+            # No probe specified - use original behavior (try loading without collection)
+            print("    No probe specified, attempting default loading...")
+            try:
+                spikes = one.load_object(self.eid, 'spikes')
+                clusters = one.load_object(self.eid, 'clusters')
+            except Exception as e:
+                raise ValueError(f"Could not load spikes or clusters data for session {self.eid}. "
+                            f"This may be a multi-probe session. Try specifying 'probe_selection' in config. Error: {e}")
+        
+        elif isinstance(probe_spec, str):
+            # Single probe specified as string
+            print(f"    Loading from specified probe: {probe_spec}")
+            try:
+                spikes = one.load_object(self.eid, 'spikes', collection=probe_spec)
+                clusters = one.load_object(self.eid, 'clusters', collection=probe_spec)
+            except Exception as e:
+                raise ValueError(f"Could not load spikes or clusters from probe '{probe_spec}' for session {self.eid}: {e}")
+        
+        elif isinstance(probe_spec, list):
+            if len(probe_spec) == 1:
+                # Single probe specified as list
+                probe_collection = probe_spec[0]
+                print(f"    Loading from specified probe: {probe_collection}")
+                try:
+                    spikes = one.load_object(self.eid, 'spikes', collection=probe_collection)
+                    clusters = one.load_object(self.eid, 'clusters', collection=probe_collection)
+                except Exception as e:
+                    raise ValueError(f"Could not load spikes or clusters from probe '{probe_collection}' for session {self.eid}: {e}")
+            
+            elif len(probe_spec) > 1:
+                # Multiple probes specified - not implemented yet
+                raise NotImplementedError(f"Loading and combining data from multiple probes {probe_spec} is not yet implemented. "
+                                        f"Please specify a single probe collection.")
+            else:
+                # Empty list
+                raise ValueError("probe_selection cannot be an empty list. Specify a probe collection or set to None.")
+        
+        else:
+            raise ValueError(f"probe_selection must be None, a string, or a list. Got: {type(probe_spec)}")
         
         if spikes is None or clusters is None:
             raise ValueError(f"Could not load spikes or clusters data for session {self.eid}")
         
+        # Continue with existing code for processing spikes...
         # Get unique cluster IDs from spikes data
         cluster_ids = np.unique(spikes.clusters)
         
         # Get good clusters using quality metrics
         if hasattr(clusters, 'metrics') and hasattr(clusters.metrics, 'label'):
             good_cluster_mask = clusters.metrics.label == 1
-            # Map cluster IDs to indices in the metrics array
             good_cluster_indices = np.where(good_cluster_mask)[0]
-            good_cluster_ids = good_cluster_indices  # Use indices as cluster IDs
+            good_cluster_ids = good_cluster_indices
         else:
-            # No quality metrics available, use all clusters
             good_cluster_ids = cluster_ids
             print(f"    No quality metrics found, using all {len(good_cluster_ids)} clusters")
-        
+
         # Filter for brain regions if specified
         if self.brain_regions:
             print(f"    Brain region filtering requested but not fully implemented yet")
         
         n_neurons = len(good_cluster_ids)
         print(f"    Using {n_neurons} good clusters out of {len(cluster_ids)} total")
-        
+                
         # Create mapping from cluster ID to neuron index
         cluster_to_neuron = {cluster_id: idx for idx, cluster_id in enumerate(good_cluster_ids)}
         
@@ -442,7 +486,6 @@ class IBLDataset(NeuralDataset):
         # Populate split-specific data
         for split in ['train', 'val', 'test']:
             split_indices = self.splits[split]
-            
             self.neural_data[split] = self.aligned_neural_data[split_indices]
             self.behavior_data[split] = {key: vals[split_indices] 
                                        for key, vals in self.aligned_behavior_data.items()}

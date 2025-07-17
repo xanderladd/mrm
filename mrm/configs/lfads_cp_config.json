@@ -1,0 +1,70 @@
+{
+  "experiment": {
+    "name": "ibl_lfads_analysis",
+    "session_id": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe",
+    "description": "LFADS analysis of IBL session with behavioral context"
+  },
+  "dataset": {
+    "type": "ibl", 
+    "params": {
+      "eid": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe",
+      "alignment_event": "stimOn_times",
+      "pre_time": 0.5,
+      "post_time": 1.5,
+      "bin_size": 0.01,
+      "min_trial_length": 1.8,
+      "val_fraction": 0.15,
+      "test_fraction": 0.15,
+      "random_seed": 42,
+      "use_cache": true
+    }
+  },
+  "model": {
+    "type": "lfads",
+    "params": {
+      "latent_dim": 32,
+      "generator_dim": 128,
+      "controller_dim": 64,
+      "ic_dim": 32,
+      "co_dim": 16,
+      "learning_rate": 0.007,
+      "max_epochs": 10,
+      "batch_size": 32,
+      "external_inputs": [
+        "choice",
+        "stimulus_contrast", 
+        "movement_onset"
+      ],
+      "reconstruction_type": "poisson",
+      "dropout_rate": 0.1,
+      "kl_start_epoch": 0,
+      "kl_increase_epoch": 80,
+      "l2_start_epoch": 0,
+      "l2_increase_epoch": 80,
+      "use_cache": true
+    }
+  },
+  "save_dir": "D:/multi_region/outputs",
+  "analysis": {
+    "extract_latents": true,
+    "behavioral_decoding": true,
+    "dimensionality_analysis": true,
+    "trajectory_visualization": true,
+    "reconstruction_quality": true,
+    "split_by_behavior": {
+      "choice": [-1, 0, 1],
+      "stimulus_contrast": [0, 0.25, 0.5, 1.0],
+      "correct_trials": [true, false]
+    }
+  },
+  "visualization": {
+    "latent_dims_to_plot": [0, 1, 2],
+    "max_trials_trajectory": 20,
+    "time_window": [-0.5, 1.5],
+    "plot_settings": {
+      "dpi": 300,
+      "figsize": [12, 8],
+      "alpha": 0.7
+    }
+  }
+}

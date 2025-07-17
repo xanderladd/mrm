@@ -409,7 +409,7 @@ def visualize_embeddings(config_path: str):
     
     # Load visualization config
     viz_config = config.get('visualization', {})
-    splits = viz_config.get('splits', ['test', 'val'])
+    splits = viz_config.get('splits', ['train', 'test', 'val'])
     behavioral_signals = viz_config.get('behavioral_signals', [
         'choice', 'feedback_type', 'stimulus_contrast_left', 
         'stimulus_contrast_right', 'reaction_time'

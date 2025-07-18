@@ -473,7 +473,7 @@ def visualize_embeddings(config_path: str):
         time_info = dataset.get_time_info(split)
         
         # Get embeddings
-        embeddings = model.encode(neural_data)
+        embeddings = model.encode(neural_data, behavior_data)
         print(f"Embeddings shape: {embeddings.shape}")
         
         

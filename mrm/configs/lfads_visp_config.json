@@ -1,14 +1,14 @@
 {
   "experiment": {
     "name": "ibl_lfads_analysis",
-    "session_id": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe", 
+    "session_id": "bda2faf5-9563-4940-a80f-ce444259e47b", 
     "description": "LFADS with optimized parameters for IBL neural trajectory analysis"
   },
   "dataset": {
     "type": "ibl", 
     "params": {
-      "eid": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe",
-      "probe_selection": ["alf/probe01/pykilosort"],
+      "eid": "bda2faf5-9563-4940-a80f-ce444259e47b",
+      "probe_selection": ["alf/probe00/pykilosort"],
       "alignment_event": "stimOn_times",
       "pre_time": 0.1,
       "post_time": 0.2,
@@ -23,7 +23,7 @@
   "model": {
     "type": "lfads",
     "params": {
-      "latent_dim": 32,
+      "latent_dim": 16,
       "generator_dim": 100,
       "controller_dim": 64,
       "ic_dim": 32,
@@ -31,9 +31,9 @@
       "ic_enc_dim": 64,
       "ci_enc_dim": 64,
       "ci_lag": 1,
-      "learning_rate": 0.007,
-      "max_epochs": 2,
-      "batch_size": 32,
+      "learning_rate": 0.01,
+      "max_epochs": 30,
+      "batch_size": 64,
       "external_inputs": ["cue"],
       "reconstruction_type": "poisson",
       "dropout_rate": 0.0,
@@ -54,12 +54,12 @@
       "l2_increase_epoch": 100,
       "kl_start_epoch": 0,
       "kl_increase_epoch": 100,
-      "kl_ic_scale": 0.0001,
-      "kl_co_scale": 0.00001,
-      "l2_ic_enc_scale": 1e-4,
-      "l2_ci_enc_scale": 1e-4,
-      "l2_gen_scale": 2e-4,
-      "l2_con_scale": 1e-4,
+      "kl_ic_scale": 0,
+      "kl_co_scale": 0,
+      "l2_ic_enc_scale": 0,
+      "l2_ci_enc_scale": 0,
+      "l2_gen_scale": 0,
+      "l2_con_scale": 0,
       "use_cache": true,
       "force_retrain": true
     }

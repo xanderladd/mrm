@@ -1,0 +1,328 @@
+import itertools
+import numpy as np
+from typing import Dict, List, Any
+import json
+from pathlib import Path
+
+
+class LFADSQuickSearch:
+    """Simple grid/random search for LFADS hyperparameters"""
+    
+    def __init__(self, dataset, output_dir: str = "./lfads_search_results"):
+        self.dataset = dataset
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(exist_ok=True, parents=True)
+        self.results = []
+    
+    def define_search_space(self) -> Dict[str, List[Any]]:
+        """Define hyperparameter search space"""
+        
+        search_space = {
+            # Critical parameters based on your poor performance
+            'learning_rate': [0.001, 0.003, 0.007, 0.01, 0.02],
+            'max_epochs': [80, 100, 120, 150],
+            'latent_dim': [16, 24, 32, 48],
+            'generator_dim': [64, 100, 128, 200],
+            'batch_size': [16, 24, 32],
+            
+            # Regularization (start conservative)
+            'kl_start_epoch': [15, 25, 35],
+            'kl_increase_epoch': [60, 80, 100],
+            'kl_ic_scale': [1e-5, 1e-4, 1e-3],
+            'kl_co_scale': [1e-6, 1e-5, 1e-4],
+            
+            'l2_start_epoch': [15, 25, 35],
+            'l2_increase_epoch': [60, 80, 100],
+            'l2_gen_scale': [1e-5, 1e-4, 1e-3],
+            'l2_con_scale': [1e-5, 1e-4, 1e-3],
+            
+            # Fixed parameters
+            'dropout_rate': [0.05],
+            'reconstruction_type': ['poisson'],
+            'external_inputs': [[]],
+        }
+        
+        return search_space
+    
+    def random_search(self, n_trials: int = 20, early_epochs: int = 50) -> Dict:
+        """
+        Random search with early stopping
+        
+        Args:
+            n_trials: Number of random configurations to try
+            early_epochs: Initial epochs for quick evaluation
+        """
+        print(f"Running random search with {n_trials} trials")
+        
+        search_space = self.define_search_space()
+        best_config = None
+        best_performance = float('inf')
+        
+        for trial in range(n_trials):
+            print(f"\n--- Trial {trial + 1}/{n_trials} ---")
+            
+            # Sample random configuration
+            config = {}
+            for param, values in search_space.items():
+                config[param] = np.random.choice(values)
+            
+            # Quick evaluation with fewer epochs
+            config['max_epochs'] = early_epochs
+            
+            performance = self._evaluate_config(config, trial_id=trial)
+            
+            if performance < best_performance:
+                best_performance = performance
+                best_config = config.copy()
+                print(f"✓ New best: {performance:.4f}")
+            
+            # Store result
+            self.results.append({
+                'trial': trial,
+                'config': config,
+                'performance': performance,
+                'epochs': early_epochs
+            })
+        
+        # Extended training for top candidates
+        print(f"\n=== Extended Training for Top Candidates ===")
+        self._extended_training_top_candidates(n_top=5, extended_epochs=100)
+        
+        return best_config
+    
+    def grid_search_focused(self, focus_params: Dict[str, List] = None) -> Dict:
+        """
+        Focused grid search on most important parameters
+        
+        Args:
+            focus_params: Override default focused parameter grid
+        """
+        
+        if focus_params is None:
+            # Focus on the most critical parameters
+            focus_params = {
+                'learning_rate': [0.0001, 0.001, 0.005],
+                'max_epochs': [25, 50, 100, 150],
+                'latent_dim': [32],
+                'kl_start_epoch': [20],
+                'kl_ic_scale': [0, 1e-4],
+                'l2_gen_scale': [0, 1e-4],
+                
+                # Fixed for grid search
+                'generator_dim': [100],
+                'batch_size': [32],
+                'dropout_rate': [0.05],
+                'reconstruction_type': ['poisson'],
+                'external_inputs': [[]],
+                'kl_co_scale': [1e-5],
+                'l2_con_scale': [1e-4],
+                'kl_increase_epoch': [80],
+                'l2_start_epoch': [20],
+                'l2_increase_epoch': [80],
+            }
+        
+        # Generate all combinations
+        param_names = list(focus_params.keys())
+        param_values = list(focus_params.values())
+        
+        total_combinations = np.prod([len(v) for v in param_values])
+        print(f"Grid search: {total_combinations} combinations")
+        
+        if total_combinations > 50:
+            print("Warning: Large grid size. Consider random search instead.")
+        
+        best_config = None
+        best_performance = float('inf')
+        
+        for i, combination in enumerate(itertools.product(*param_values)):
+            print(f"\n--- Grid {i + 1}/{total_combinations} ---")
+            
+            config = dict(zip(param_names, combination))
+            performance = self._evaluate_config(config, trial_id=i)
+            
+            if performance < best_performance:
+                best_performance = performance
+                best_config = config.copy()
+                print(f"✓ New best: {performance:.4f}")
+            
+            self.results.append({
+                'trial': i,
+                'config': config,
+                'performance': performance,
+                'epochs': config['max_epochs']
+            })
+        
+        return best_config
+    
+    def _evaluate_config(self, config: Dict, trial_id: int) -> float:
+        """Evaluate a single configuration"""
+        
+        try:
+            print(f"Testing: lr={config['learning_rate']:.4f}, "
+                  f"latent_dim={config['latent_dim']}, "
+                  f"epochs={config['max_epochs']}")
+            
+            # Create and train model
+            model = LFADSModel(**config)
+            model.fit(self.dataset)
+            
+            # Evaluate on validation set
+            val_neural = self.dataset.get_neural_data('val')
+            evaluation_results = model.evaluate_reconstruction(val_neural)
+            
+            # Use negative R² as loss (lower is better)
+            performance = -evaluation_results.get('r2_mean', -1000)
+            
+            print(f"Performance: {performance:.4f} (R²: {-performance:.4f})")
+            
+            # Save model if it's good
+            if performance < 0:  # R² > 0
+                model_path = self.output_dir / f"model_trial_{trial_id}_r2_{-performance:.3f}.pkl"
+                model.save(str(model_path))
+                print(f"Model saved: {model_path}")
+            
+            return performance
+            
+        except Exception as e:
+            print(f"Training failed: {e}")
+            return float('inf')
+    
+    def _extended_training_top_candidates(self, n_top: int = 5, extended_epochs: int = 100):
+        """Extended training for top performing candidates"""
+        
+        # Sort results by performance
+        sorted_results = sorted(self.results, key=lambda x: x['performance'])
+        top_candidates = sorted_results[:n_top]
+        
+        print(f"Extended training for top {n_top} candidates")
+        
+        for i, result in enumerate(top_candidates):
+            if result['performance'] == float('inf'):
+                continue
+                
+            print(f"\n--- Extended Training {i+1}/{n_top} ---")
+            
+            # Use same config but with more epochs
+            extended_config = result['config'].copy()
+            extended_config['max_epochs'] = extended_epochs
+            
+            extended_performance = self._evaluate_config(
+                extended_config, 
+                trial_id=f"extended_{result['trial']}"
+            )
+            
+            # Update result
+            result['extended_performance'] = extended_performance
+            result['extended_epochs'] = extended_epochs
+            
+            print(f"Extended performance: {extended_performance:.4f}")
+    
+    def get_best_config(self) -> Dict:
+        """Get the best configuration found"""
+        if not self.results:
+            return None
+        
+        # Check extended results first, then regular results
+        best_result = None
+        best_performance = float('inf')
+        
+        for result in self.results:
+            # Use extended performance if available
+            perf = result.get('extended_performance', result['performance'])
+            if perf < best_performance:
+                best_performance = perf
+                best_result = result
+        
+        return best_result
+    
+    def save_results(self):
+        """Save search results"""
+        results_file = self.output_dir / "search_results.json"
+        
+        # Convert numpy types to native Python types for JSON serialization
+        json_results = []
+        for result in self.results:
+            json_result = {}
+            for key, value in result.items():
+                if isinstance(value, (np.integer, np.floating)):
+                    json_result[key] = value.item()
+                elif isinstance(value, dict):
+                    json_result[key] = {k: v.item() if isinstance(v, (np.integer, np.floating)) else v 
+                                       for k, v in value.items()}
+                else:
+                    json_result[key] = value
+            json_results.append(json_result)
+        
+        with open(results_file, 'w') as f:
+            json.dump(json_results, f, indent=2)
+        
+        print(f"Results saved to: {results_file}")
+        
+        # Save summary
+        best_result = self.get_best_config()
+        if best_result:
+            summary = {
+                'best_performance': best_result.get('extended_performance', best_result['performance']),
+                'best_config': best_result['config'],
+                'total_trials': len(self.results)
+            }
+            
+            summary_file = self.output_dir / "search_summary.json"
+            with open(summary_file, 'w') as f:
+                json.dump(summary, f, indent=2)
+            
+            print(f"Summary saved to: {summary_file}")
+
+
+def quick_lfads_search(dataset, search_type: str = 'random', **kwargs):
+    """
+    Run quick LFADS hyperparameter search
+    
+    Args:
+        dataset: Your neural dataset
+        search_type: 'random' or 'grid'
+        **kwargs: Additional arguments for search methods
+    """
+    
+    searcher = LFADSQuickSearch(dataset)
+    
+    if search_type == 'random':
+        n_trials = kwargs.get('n_trials', 15)
+        early_epochs = kwargs.get('early_epochs', 50)
+        best_config = searcher.random_search(n_trials=n_trials, early_epochs=early_epochs)
+    elif search_type == 'grid':
+        focus_params = kwargs.get('focus_params', None)
+        best_config = searcher.grid_search_focused(focus_params=focus_params)
+    else:
+        raise ValueError("search_type must be 'random' or 'grid'")
+    
+    searcher.save_results()
+    
+    # Print summary
+    best_result = searcher.get_best_config()
+    if best_result:
+        print(f"\n=== SEARCH COMPLETE ===")
+        print(f"Best performance: {best_result.get('extended_performance', best_result['performance']):.4f}")
+        print(f"Best config:")
+        for key, value in best_result['config'].items():
+            print(f"  {key}: {value}")
+    
+    return best_config, searcher
+
+
+# Example usage:
+if __name__ == "__main__":
+    # Quick random search (recommended first step)
+    best_config, searcher = quick_lfads_search(
+        dataset, 
+        search_type='random', 
+        n_trials=20,
+        early_epochs=50
+    )
+    
+    # Or focused grid search
+    # best_config, searcher = quick_lfads_search(
+    #     dataset,
+    #     search_type='grid'
+    # )
+    pass

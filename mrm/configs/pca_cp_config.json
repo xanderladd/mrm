@@ -1,7 +1,7 @@
 {
   "experiment": {
     "name": "ibl_pca_analysis",
-    "session_id": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe",
+    "session_id": "ebce500b-c530-47de-8cb1-963c552703ea",
     "description": "PCA analysis of IBL session neural data with mean trajectories"
   },
   "dataset": {

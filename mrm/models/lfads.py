@@ -38,49 +38,60 @@ class LFADSModel(BaseModel):
     """LFADS model using lfads-torch with IBL data integration"""
     
     def __init__(self, 
-                 latent_dim: int = 32,
-                 generator_dim: int = 128,
-                 controller_dim: int = 64,
-                 ic_dim: int = 32,
-                 co_dim: int = 16,
-                 learning_rate: float = 0.007,
-                 max_epochs: int = 200,
-                 batch_size: int = 32,
-                 external_inputs: List[str] = None,
-                 reconstruction_type: str = 'poisson',
-                 dropout_rate: float = 0.1,
-                 kl_start_epoch: int = 0,
-                 kl_increase_epoch: int = 80,
-                 l2_start_epoch: int = 0,
-                 l2_increase_epoch: int = 80,
-                 use_cache: bool = True,
-                 **kwargs):
+             latent_dim: int = 32,
+             generator_dim: int = 128,
+             controller_dim: int = 64,
+             ic_dim: int = 32,
+             co_dim: int = 16,
+             learning_rate: float = 0.007,
+             max_epochs: int = 200,
+             batch_size: int = 32,
+             external_inputs: List[str] = None,
+             reconstruction_type: str = 'poisson',
+             dropout_rate: float = 0.1,
+             kl_start_epoch: int = 0,
+             kl_increase_epoch: int = 80,
+             l2_start_epoch: int = 0,
+             l2_increase_epoch: int = 80,
+             use_cache: bool = True,
+             
+             # NEW: Additional configurable parameters
+             variational: bool = True,
+             ic_post_var_min: float = 1e-4,
+             cell_clip: float = 5.0,
+             loss_scale: float = 1.0,
+             recon_reduce_mean: bool = True,
+             lr_scheduler: bool = True,
+             lr_stop: float = None,  # Will default to learning_rate/100
+             lr_decay: float = 0.95,
+             lr_patience: int = 6,
+             lr_adam_beta1: float = 0.9,
+             lr_adam_beta2: float = 0.999,
+             lr_adam_epsilon: float = 1e-8,
+             weight_decay: float = 0.0,
+             l2_ic_enc_scale: float = 0.0,
+             l2_ci_enc_scale: float = 0.0,
+             l2_gen_scale: float = 0.0,
+             l2_con_scale: float = 0.0,
+             kl_ic_scale: float = 0.0,
+             kl_co_scale: float = 0.0,
+             ic_enc_dim: int = None,  # Will default to controller_dim
+             ci_enc_dim: int = None,  # Will default to controller_dim
+             ci_lag: int = 1,
+             co_prior_tau: float = 10.0,
+             co_prior_nvar: float = 0.1,
+             ic_prior_mean: float = 0.0,
+             ic_prior_variance: float = 0.1,
+             **kwargs):
         """
-        Initialize LFADS model
-        
-        Args:
-            latent_dim: Dimensionality of latent factors
-            generator_dim: Hidden units in generator RNN
-            controller_dim: Hidden units in controller (encoder)
-            ic_dim: Initial conditions dimensionality
-            co_dim: Controller output dimensionality
-            learning_rate: Learning rate for training
-            max_epochs: Maximum training epochs
-            batch_size: Batch size for training
-            external_inputs: List of behavioral signals to use as external inputs
-            reconstruction_type: 'poisson' or 'gaussian' reconstruction
-            dropout_rate: Dropout rate
-            kl_start_epoch: Epoch to start KL annealing
-            kl_increase_epoch: Epoch to finish KL annealing
-            l2_start_epoch: Epoch to start L2 regularization
-            l2_increase_epoch: Epoch to finish L2 regularization
-            use_cache: Whether to cache processed data
+        Initialize LFADS model with full parameter control
         """
         super().__init__()
         
         if not LFADS_AVAILABLE:
-            raise ImportError("lfads-torch is required. Install with: pip install git+https://github.com/arsedler9/lfads-torch.git")
-        
+            raise ImportError("lfads-torch is required.")
+            
+        # Store all parameters
         self.latent_dim = latent_dim
         self.generator_dim = generator_dim
         self.controller_dim = controller_dim
@@ -89,7 +100,7 @@ class LFADSModel(BaseModel):
         self.learning_rate = learning_rate
         self.max_epochs = max_epochs
         self.batch_size = batch_size
-        self.external_inputs = external_inputs
+        self.external_inputs = external_inputs or []
         self.reconstruction_type = reconstruction_type
         self.dropout_rate = dropout_rate
         self.kl_start_epoch = kl_start_epoch
@@ -97,6 +108,34 @@ class LFADSModel(BaseModel):
         self.l2_start_epoch = l2_start_epoch
         self.l2_increase_epoch = l2_increase_epoch
         self.use_cache = use_cache
+        
+        # NEW: Store additional parameters
+        self.variational = variational
+        self.ic_post_var_min = ic_post_var_min
+        self.cell_clip = cell_clip
+        self.loss_scale = loss_scale
+        self.recon_reduce_mean = recon_reduce_mean
+        self.lr_scheduler = lr_scheduler
+        self.lr_stop = lr_stop if lr_stop is not None else learning_rate / 100
+        self.lr_decay = lr_decay
+        self.lr_patience = lr_patience
+        self.lr_adam_beta1 = lr_adam_beta1
+        self.lr_adam_beta2 = lr_adam_beta2
+        self.lr_adam_epsilon = lr_adam_epsilon
+        self.weight_decay = weight_decay
+        self.l2_ic_enc_scale = l2_ic_enc_scale
+        self.l2_ci_enc_scale = l2_ci_enc_scale
+        self.l2_gen_scale = l2_gen_scale
+        self.l2_con_scale = l2_con_scale
+        self.kl_ic_scale = kl_ic_scale
+        self.kl_co_scale = kl_co_scale
+        self.ic_enc_dim = ic_enc_dim if ic_enc_dim is not None else controller_dim
+        self.ci_enc_dim = ci_enc_dim if ci_enc_dim is not None else controller_dim
+        self.ci_lag = ci_lag
+        self.co_prior_tau = co_prior_tau
+        self.co_prior_nvar = co_prior_nvar
+        self.ic_prior_mean = ic_prior_mean
+        self.ic_prior_variance = ic_prior_variance
         
         # Will be set during training
         self.lfads_model = None
@@ -160,13 +199,15 @@ class LFADSModel(BaseModel):
         print("LFADS training completed!")
         return self
         
-    def encode(self, neural_data: np.ndarray, external_inputs: np.ndarray = None) -> np.ndarray:
+    def encode(self, neural_data: np.ndarray, 
+           behavior_data: Dict[str, np.ndarray] = None) -> np.ndarray:
         """
         Encode neural data to latent factors
         
         Args:
             neural_data: Shape (n_trials, n_timepoints, n_neurons) or (n_timepoints, n_neurons)
-            external_inputs: Shape (n_trials, n_timepoints, n_ext_inputs) or (n_timepoints, n_ext_inputs)
+            behavior_data: Dict containing behavioral signals (choice, stimulus_contrast_left, etc.)
+                        Uses self.external_inputs to determine which signals to extract
             
         Returns:
             latent_factors: Shape (n_trials, n_timepoints, latent_dim) or (n_timepoints, latent_dim)
@@ -178,21 +219,26 @@ class LFADSModel(BaseModel):
         single_trial = False
         if neural_data.ndim == 2:
             neural_data = neural_data[np.newaxis]  # Add trial dimension
-            if external_inputs is not None:
-                external_inputs = external_inputs[np.newaxis]
             single_trial = True
             
         n_trials, n_timepoints, n_neurons = neural_data.shape
         
-        # Create dummy external inputs if not provided
-        if external_inputs is None:
+        # Process external inputs based on self.external_inputs
+        if behavior_data is not None:
+            # Compute external inputs from behavioral data using same logic as training
+            external_inputs = self._extract_external_inputs(behavior_data, (n_trials, n_timepoints))
+        else:
+            # No behavioral data provided - create zeros
             n_ext_inputs = len(self.external_inputs)
             external_inputs = np.zeros((n_trials, n_timepoints, n_ext_inputs))
-            
+            if len(self.external_inputs) > 0:
+                import warnings
+                warnings.warn(f"No behavioral data provided. Using zeros for external inputs: {self.external_inputs}")
+        
         # Convert to tensors
         neural_tensor = torch.FloatTensor(neural_data)
         ext_tensor = torch.FloatTensor(external_inputs)
-        
+
         # Create session batch
         session_batch = SessionBatch(
             encod_data=neural_tensor,
@@ -220,7 +266,7 @@ class LFADSModel(BaseModel):
     def decode(self, latents: np.ndarray) -> np.ndarray:
         """
         Decode latent factors to reconstructed neural data
-        
+
         Args:
             latents: Shape (n_trials, n_timepoints, latent_dim) or (n_timepoints, latent_dim)
             
@@ -238,26 +284,46 @@ class LFADSModel(BaseModel):
             
         n_trials, n_timepoints, latent_dim = latents.shape
         n_neurons = self.data_info['n_neurons']
-        
-        # For true decoding from latents, we'd need access to LFADS generator
-        # For now, we'll do a forward pass through the full model
-        # This is a limitation of the current lfads-torch API
-        
-        # Create dummy data for forward pass
-        dummy_neural = np.random.poisson(1.0, (n_trials, n_timepoints, n_neurons))
-        dummy_ext = np.zeros((n_trials, n_timepoints, len(self.external_inputs)))
-        
-        reconstructed = self.encode(dummy_neural, dummy_ext)
-        
-        # This is a placeholder - true latent decoding would require
-        # access to the generator network directly
-        warnings.warn("Direct latent decoding not fully implemented. "
-                     "Use encode() for latent extraction from neural data.")
-        
-        if single_trial:
-            dummy_neural = dummy_neural[0]
+        n_ext_inputs = len(self.external_inputs)
+
+        # Convert latents to tensor
+        latents_tensor = torch.FloatTensor(latents)
+
+        # Create dummy external inputs (or use stored ones if available)
+        ext_inputs = torch.zeros(n_trials, n_timepoints, n_ext_inputs)
+
+        # Get device of the model
+        device = next(self.lfads_model.parameters()).device
+        latents_tensor = latents_tensor.to(device)
+        ext_inputs = ext_inputs.to(device)
+
+        self.lfads_model.eval()
+        with torch.no_grad():
+            # Access the generator directly to decode from latents
+            # This requires understanding the LFADS model structure
+            # Method 1: Try to use the readout layer directly
+            readout = self.lfads_model.readout[0]  # First (and usually only) readout
             
-        return dummy_neural.astype(np.float32)
+            # Apply readout to latents to get rates
+            rates = readout(latents_tensor)  # Shape: (n_trials, n_timepoints, n_neurons)
+            
+            # Convert rates to reconstruction based on distribution type
+            if self.reconstruction_type == 'poisson':
+                # For Poisson, rates are the natural parameters
+                reconstructed = rates
+            else:
+                # For Gaussian, use rates directly
+                reconstructed = rates
+                
+            
+        # Convert back to numpy
+        reconstructed_np = reconstructed.cpu().numpy()
+
+        # Return single trial if input was single trial
+        if single_trial:
+            reconstructed_np = reconstructed_np[0]
+            
+        return reconstructed_np.astype(np.float32)
         
     def predict(self, neural_data: np.ndarray, steps_ahead: int = 1, 
                 external_inputs: np.ndarray = None) -> np.ndarray:
@@ -427,7 +493,6 @@ class LFADSModel(BaseModel):
         """Extract external inputs from behavioral data"""
         n_trials, n_timepoints = data_shape
         n_ext_inputs = len(self.external_inputs)
-        
         ext_inputs = np.zeros((n_trials, n_timepoints, n_ext_inputs))
         
         for i, input_name in enumerate(self.external_inputs):
@@ -489,13 +554,53 @@ class LFADSModel(BaseModel):
         return ext_inputs
         
     def _create_lfads_model(self, data_info: Dict) -> LFADS:
-        """Create LFADS model with specified architecture"""
+        """Create LFADS model with specified architecture using all config parameters"""
         
         # Choose reconstruction distribution
         if self.reconstruction_type == 'poisson':
             reconstruction = nn.ModuleList([Poisson()])
         else:
             reconstruction = nn.ModuleList([Gaussian()])
+        
+        # Get additional parameters with defaults
+        variational = getattr(self, 'variational', True)
+        ic_post_var_min = getattr(self, 'ic_post_var_min', 1e-4)
+        cell_clip = getattr(self, 'cell_clip', 5.0)
+        loss_scale = getattr(self, 'loss_scale', 1.0)
+        recon_reduce_mean = getattr(self, 'recon_reduce_mean', True)
+        
+        # Learning rate scheduler parameters
+        lr_scheduler = getattr(self, 'lr_scheduler', True)
+        lr_stop = getattr(self, 'lr_stop', self.learning_rate / 100)
+        lr_decay = getattr(self, 'lr_decay', 0.95)
+        lr_patience = getattr(self, 'lr_patience', 6)
+        
+        # Adam optimizer parameters
+        lr_adam_beta1 = getattr(self, 'lr_adam_beta1', 0.9)
+        lr_adam_beta2 = getattr(self, 'lr_adam_beta2', 0.999)
+        lr_adam_epsilon = getattr(self, 'lr_adam_epsilon', 1e-8)
+        weight_decay = getattr(self, 'weight_decay', 0.0)
+        
+        # L2 regularization parameters
+        l2_ic_enc_scale = getattr(self, 'l2_ic_enc_scale', 0.0)
+        l2_ci_enc_scale = getattr(self, 'l2_ci_enc_scale', 0.0)
+        l2_gen_scale = getattr(self, 'l2_gen_scale', 0.0)
+        l2_con_scale = getattr(self, 'l2_con_scale', 0.0)
+        
+        # KL regularization parameters
+        kl_ic_scale = getattr(self, 'kl_ic_scale', 0.0)
+        kl_co_scale = getattr(self, 'kl_co_scale', 0.0)
+        
+        # Encoder parameters
+        ic_enc_dim = getattr(self, 'ic_enc_dim', self.controller_dim)
+        ci_enc_dim = getattr(self, 'ci_enc_dim', self.controller_dim)
+        ci_lag = getattr(self, 'ci_lag', 1)
+        
+        # Prior parameters
+        co_prior_tau = getattr(self, 'co_prior_tau', 10.0)
+        co_prior_nvar = getattr(self, 'co_prior_nvar', 0.1)
+        ic_prior_mean = getattr(self, 'ic_prior_mean', 0.0)
+        ic_prior_variance = getattr(self, 'ic_prior_variance', 0.1)
             
         # Create LFADS model
         model = LFADS(
@@ -507,9 +612,9 @@ class LFADSModel(BaseModel):
             
             # Encoder dimensions
             ic_enc_seq_len=min(20, data_info['n_timepoints'] // 4),
-            ic_enc_dim=self.controller_dim,
-            ci_enc_dim=self.controller_dim,
-            ci_lag=1,
+            ic_enc_dim=ic_enc_dim,
+            ci_enc_dim=ci_enc_dim,
+            ci_lag=ci_lag,
             
             # Core architecture  
             con_dim=self.controller_dim,
@@ -520,16 +625,16 @@ class LFADSModel(BaseModel):
             
             # Training parameters
             dropout_rate=self.dropout_rate,
-            variational=True,
-            ic_post_var_min=1e-4,
-            cell_clip=5.0,
+            variational=variational,
+            ic_post_var_min=ic_post_var_min,
+            cell_clip=cell_clip,
             
             # Reconstruction
             reconstruction=reconstruction,
             
             # Priors
-            co_prior=AutoregressiveMultivariateNormal(tau=10.0, nvar=0.1, shape=self.co_dim),
-            ic_prior=MultivariateNormal(mean=0.0, variance=0.1, shape=self.ic_dim),
+            co_prior=AutoregressiveMultivariateNormal(tau=co_prior_tau, nvar=co_prior_nvar, shape=self.co_dim),
+            ic_prior=MultivariateNormal(mean=ic_prior_mean, variance=ic_prior_variance, shape=self.ic_dim),
             
             # I/O modules
             train_aug_stack=augmentations.AugmentationStack([]),
@@ -538,35 +643,35 @@ class LFADSModel(BaseModel):
             readout=nn.ModuleList([nn.Linear(self.latent_dim, data_info['n_neurons'])]),
             
             # Loss scaling
-            loss_scale=1.0,
-            recon_reduce_mean=True,
+            loss_scale=loss_scale,
+            recon_reduce_mean=recon_reduce_mean,
             
             # Learning rate schedule
-            lr_scheduler=True,
+            lr_scheduler=lr_scheduler,
             lr_init=self.learning_rate,
-            lr_stop=self.learning_rate / 100,
-            lr_decay=0.95,
-            lr_patience=6,
+            lr_stop=lr_stop,
+            lr_decay=lr_decay,
+            lr_patience=lr_patience,
             
             # Adam parameters
-            lr_adam_beta1=0.9,
-            lr_adam_beta2=0.999,
-            lr_adam_epsilon=1e-8,
-            weight_decay=0.0,
+            lr_adam_beta1=lr_adam_beta1,
+            lr_adam_beta2=lr_adam_beta2,
+            lr_adam_epsilon=lr_adam_epsilon,
+            weight_decay=weight_decay,
             
             # Regularization schedules
             l2_start_epoch=self.l2_start_epoch,
             l2_increase_epoch=self.l2_increase_epoch,
-            l2_ic_enc_scale=0.0,
-            l2_ci_enc_scale=0.0,
-            l2_gen_scale=0.0,
-            l2_con_scale=0.0,
+            l2_ic_enc_scale=l2_ic_enc_scale,
+            l2_ci_enc_scale=l2_ci_enc_scale,
+            l2_gen_scale=l2_gen_scale,
+            l2_con_scale=l2_con_scale,
             
             # KL regularization
             kl_start_epoch=self.kl_start_epoch,
             kl_increase_epoch=self.kl_increase_epoch,
-            kl_ic_scale=0.0,
-            kl_co_scale=0.0,
+            kl_ic_scale=kl_ic_scale,
+            kl_co_scale=kl_co_scale,
         )
         
         return model

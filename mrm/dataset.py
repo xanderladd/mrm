@@ -402,7 +402,6 @@ class IBLDataset(NeuralDataset):
         aligned_behavior = {key: [] for key in self.raw_behavior.keys()}
         aligned_trial_info = []
         valid_trial_indices = []
-        
         for trial_idx in range(len(self.raw_events[self.alignment_event])):
             # Get alignment time for this trial (absolute time)
             alignment_time = self.raw_events[self.alignment_event][trial_idx]
@@ -418,7 +417,7 @@ class IBLDataset(NeuralDataset):
             if (not np.isnan(stim_time) and not np.isnan(feedback_time) and 
                 feedback_time - stim_time < self.min_trial_length):
                 continue
-            
+            # print(stim_time  - self.raw_events['movement_times'][trial_idx])
             # Calculate time window around alignment
             window_start = alignment_time - self.pre_time
             window_end = alignment_time + self.post_time
@@ -457,7 +456,7 @@ class IBLDataset(NeuralDataset):
         self.aligned_behavior_data = {key: np.array(vals) for key, vals in aligned_behavior.items()}
         self.aligned_trial_info = pd.DataFrame(aligned_trial_info).reset_index(drop=True)
         self.all_valid_trials = valid_trial_indices
-        
+
         retention_rate = len(self.all_valid_trials)/len(self.raw_events[self.alignment_event])
         print(f"Aligned {len(self.all_valid_trials)} trials (kept {retention_rate:.1%})")
         print(f"Neural data shape: {self.aligned_neural_data.shape}")

@@ -208,37 +208,105 @@ def create_reconstruction_plots(original: np.ndarray, reconstructed: np.ndarray,
     plt.tight_layout()
     figures['per_neuron_distributions'] = fig2
     
-    # 3. Example neuron traces
-    fig3, axes3 = plt.subplots(2, 2, figsize=(12, 8))
-    axes3 = axes3.flatten()
+    # 3. Enhanced neuron traces: 10 neurons with single trial and trial average
+    fig3, axes3 = plt.subplots(10, 2, figsize=(16, 25))
     
-    # Show 4 example neurons
+    # Select 10 neurons evenly spaced across all neurons
     n_neurons = original.shape[2]
-    neuron_indices = np.linspace(0, n_neurons-1, 4, dtype=int)
+    neuron_indices = np.linspace(0, n_neurons-1, 10, dtype=int)
+    
+    # Compute trial averages
+    orig_trial_avg = np.mean(original, axis=0)  # Shape: (n_timepoints, n_neurons)
+    recon_trial_avg = np.mean(reconstructed, axis=0)  # Shape: (n_timepoints, n_neurons)
+    
+    time_points = np.arange(original.shape[1])
     
     for i, neuron_idx in enumerate(neuron_indices):
-        if i >= 4:
-            break
-            
-        # Show first trial for this neuron
+        # Get correlation for this neuron
+        corr = per_neuron_metrics['correlation_per_neuron'][neuron_idx]
+        
+        # Left column: Single trial (first trial)
         trial_idx = 0
         orig_trace = original[trial_idx, :, neuron_idx]
         recon_trace = reconstructed[trial_idx, :, neuron_idx]
         
-        time_points = np.arange(len(orig_trace))
+        axes3[i, 0].plot(time_points, orig_trace, 'b-', alpha=0.8, linewidth=2, label='Original')
+        axes3[i, 0].plot(time_points, recon_trace, 'r--', alpha=0.8, linewidth=2, label='Reconstructed')
+        axes3[i, 0].set_title(f'Neuron {neuron_idx} - Single Trial (r={corr:.3f})')
+        axes3[i, 0].set_xlabel('Time Bins')
+        axes3[i, 0].set_ylabel('Activity')
+        axes3[i, 0].legend()
+        axes3[i, 0].grid(True, alpha=0.3)
         
-        axes3[i].plot(time_points, orig_trace, 'b-', alpha=0.7, linewidth=2, label='Original')
-        axes3[i].plot(time_points, recon_trace, 'r--', alpha=0.7, linewidth=2, label='Reconstructed')
+        # Right column: Trial average
+        orig_avg_trace = orig_trial_avg[:, neuron_idx]
+        recon_avg_trace = recon_trial_avg[:, neuron_idx]
         
-        corr = per_neuron_metrics['correlation_per_neuron'][neuron_idx]
-        axes3[i].set_title(f'Neuron {neuron_idx} (r={corr:.3f})')
-        axes3[i].set_xlabel('Time Bins')
-        axes3[i].set_ylabel('Activity')
-        axes3[i].legend()
-        axes3[i].grid(True, alpha=0.3)
+        # Compute correlation for trial averages
+        from scipy.stats import pearsonr
+        try:
+            avg_corr, _ = pearsonr(orig_avg_trace, recon_avg_trace)
+        except:
+            avg_corr = np.nan
+        
+        axes3[i, 1].plot(time_points, orig_avg_trace, 'b-', alpha=0.8, linewidth=2, label='Original')
+        axes3[i, 1].plot(time_points, recon_avg_trace, 'r--', alpha=0.8, linewidth=2, label='Reconstructed')
+        axes3[i, 1].set_title(f'Neuron {neuron_idx} - Trial Average (r={avg_corr:.3f})')
+        axes3[i, 1].set_xlabel('Time Bins')
+        axes3[i, 1].set_ylabel('Activity')
+        axes3[i, 1].legend()
+        axes3[i, 1].grid(True, alpha=0.3)
     
     plt.tight_layout()
     figures['example_traces'] = fig3
+    
+    # 4. Additional plot: Best vs Worst neurons
+    fig4, axes4 = plt.subplots(2, 2, figsize=(16, 10))
+    
+    # Find best and worst neurons by correlation
+    valid_corr_mask = ~np.isnan(per_neuron_metrics['correlation_per_neuron'])
+    valid_corrs = per_neuron_metrics['correlation_per_neuron'][valid_corr_mask]
+    valid_indices = np.where(valid_corr_mask)[0]
+    
+    if len(valid_corrs) > 0:
+        # Best neurons
+        best_idx = valid_indices[np.argmax(valid_corrs)]
+        best_corr = valid_corrs[np.argmax(valid_corrs)]
+        
+        # Worst neurons  
+        worst_idx = valid_indices[np.argmin(valid_corrs)]
+        worst_corr = valid_corrs[np.argmin(valid_corrs)]
+        
+        # Plot best neuron - single trial
+        axes4[0, 0].plot(time_points, original[0, :, best_idx], 'b-', linewidth=2, label='Original')
+        axes4[0, 0].plot(time_points, reconstructed[0, :, best_idx], 'r--', linewidth=2, label='Reconstructed')
+        axes4[0, 0].set_title(f'Best Neuron {best_idx} - Single Trial (r={best_corr:.3f})')
+        axes4[0, 0].legend()
+        axes4[0, 0].grid(True, alpha=0.3)
+        
+        # Plot best neuron - trial average
+        axes4[0, 1].plot(time_points, orig_trial_avg[:, best_idx], 'b-', linewidth=2, label='Original')
+        axes4[0, 1].plot(time_points, recon_trial_avg[:, best_idx], 'r--', linewidth=2, label='Reconstructed')
+        axes4[0, 1].set_title(f'Best Neuron {best_idx} - Trial Average')
+        axes4[0, 1].legend()
+        axes4[0, 1].grid(True, alpha=0.3)
+        
+        # Plot worst neuron - single trial
+        axes4[1, 0].plot(time_points, original[0, :, worst_idx], 'b-', linewidth=2, label='Original')
+        axes4[1, 0].plot(time_points, reconstructed[0, :, worst_idx], 'r--', linewidth=2, label='Reconstructed')
+        axes4[1, 0].set_title(f'Worst Neuron {worst_idx} - Single Trial (r={worst_corr:.3f})')
+        axes4[1, 0].legend()
+        axes4[1, 0].grid(True, alpha=0.3)
+        
+        # Plot worst neuron - trial average
+        axes4[1, 1].plot(time_points, orig_trial_avg[:, worst_idx], 'b-', linewidth=2, label='Original')
+        axes4[1, 1].plot(time_points, recon_trial_avg[:, worst_idx], 'r--', linewidth=2, label='Reconstructed')
+        axes4[1, 1].set_title(f'Worst Neuron {worst_idx} - Trial Average')
+        axes4[1, 1].legend()
+        axes4[1, 1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    figures['best_worst_neurons'] = fig4
     
     # Save plots
     for name, fig in figures.items():
@@ -247,7 +315,6 @@ def create_reconstruction_plots(original: np.ndarray, reconstructed: np.ndarray,
         print(f"Saved plot: {save_path}")
     
     return figures
-
 
 def evaluate_reconstruction(config_path: str, splits: List[str] = ['test'], 
                           create_plots: bool = True) -> Dict:
@@ -303,6 +370,7 @@ def evaluate_reconstruction(config_path: str, splits: List[str] = ['test'],
         
         # Get neural data
         neural_data = dataset.get_neural_data(split)
+        behavior =  dataset.get_behavior_data(split)
         print(f"Neural data shape: {neural_data.shape}")
         
         # Get reconstructions
@@ -311,23 +379,16 @@ def evaluate_reconstruction(config_path: str, splits: List[str] = ['test'],
             warnings.simplefilter("ignore")
             
             # Encode to latents
-            latents = model.encode(neural_data)
-            print(f"Latents shape: {latents.shape}")
-            
-            # Decode back to neural space
-            reconstructed = model.decode(latents)
-            print(f"Reconstructed shape: {reconstructed.shape}")
+            if hasattr(model, 'get_reconstruction_rates'):
+                reconstructed = model.get_reconstruction_rates(neural_data, behavior)
+            else:
+                print("NOT LFADS")
+                latents = model.encode(neural_data)
+                reconstructed = model.decode(latents)
+
+        print(f"Reconstructed shape: {reconstructed.shape}")
         
-        # Ensure shapes match
-        if reconstructed.shape != neural_data.shape:
-            print(f"Warning: Shape mismatch. Original: {neural_data.shape}, Reconstructed: {reconstructed.shape}")
-            # Try to handle common shape mismatches
-            if len(reconstructed.shape) == 2 and len(neural_data.shape) == 3:
-                # Reshape 2D back to 3D
-                n_trials, n_timepoints, n_neurons = neural_data.shape
-                reconstructed = reconstructed.reshape(n_trials, n_timepoints, n_neurons)
-                print(f"Reshaped reconstructed to: {reconstructed.shape}")
-        
+      
         # Compute metrics
         print("Computing reconstruction metrics...")
         
@@ -348,7 +409,7 @@ def evaluate_reconstruction(config_path: str, splits: List[str] = ['test'],
             'data_shapes': {
                 'original': neural_data.shape,
                 'reconstructed': reconstructed.shape,
-                'latents': latents.shape
+                # 'latents': latents.shape
             }
         }
         

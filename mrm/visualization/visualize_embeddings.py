@@ -188,41 +188,67 @@ def create_mean_trajectory_plots(
                             sigma=smoothing_sigma
                         )
                 
-                # Plot mean trajectory
                 color = colors.get(condition_name, '#1f77b4')
+                
+                # Add error bars at specific timepoints if requested
+                if confidence_intervals and len(condition_trajectories) > 1:
+                    # Calculate error bars perpendicular to trajectory at key timepoints
+                    n_error_bars = min(8, mean_trajectory.shape[0] // 5)  # Every 5th timepoint, max 8 bars
+                    error_bar_indices = np.linspace(0, mean_trajectory.shape[0]-1, n_error_bars, dtype=int)
+                    
+                    for idx in error_bar_indices:
+                        # Get mean position at this timepoint
+                        mean_pos = mean_trajectory[idx]
+                        
+                        # Get all trial positions at this timepoint
+                        trial_positions = condition_trajectories[:, idx, :]
+                        
+                        # Calculate standard error
+                        std_pos = np.std(trial_positions, axis=0)
+                        se_pos = std_pos / np.sqrt(len(trial_positions))  # Standard error
+                        
+                        # Calculate trajectory direction (tangent vector)
+                        if idx == 0:
+                            # Use direction to next point
+                            tangent = mean_trajectory[idx+1] - mean_trajectory[idx]
+                        elif idx == mean_trajectory.shape[0] - 1:
+                            # Use direction from previous point
+                            tangent = mean_trajectory[idx] - mean_trajectory[idx-1]
+                        else:
+                            # Use average of directions
+                            tangent = (mean_trajectory[idx+1] - mean_trajectory[idx-1]) / 2
+                        
+                        # Normalize tangent
+                        tangent_norm = np.linalg.norm(tangent)
+                        if tangent_norm > 0:
+                            tangent = tangent / tangent_norm
+                            
+                            # Get perpendicular vector (rotate 90 degrees)
+                            perp_vector = np.array([-tangent[1], tangent[0]])
+                            
+                            # Calculate error bar length (use magnitude of SE vector)
+                            error_magnitude = np.linalg.norm(se_pos)
+                            
+                            # Draw error bar
+                            error_start = mean_pos - perp_vector * error_magnitude
+                            error_end = mean_pos + perp_vector * error_magnitude
+                            
+                            ax.plot([error_start[0], error_end[0]], [error_start[1], error_end[1]], 
+                                   color=color, alpha=0.6, linewidth=2, solid_capstyle='round')
+                
+                # Plot mean trajectory (on top of confidence visualization)
                 ax.plot(mean_trajectory[:, 0], mean_trajectory[:, 1], 
                        color=color, linewidth=3, 
                        label=f'{condition_name} (n={np.sum(condition_mask)})',
-                       alpha=0.9)
-                
-                # Add confidence intervals if requested
-                if confidence_intervals and len(condition_trajectories) > 1:
-                    std_trajectory = np.std(condition_trajectories, axis=0)
-                    
-                    # Apply same spatial smoothing to std
-                    if smoothing_sigma is not None:
-                        for dim in range(2):
-                            std_trajectory[:, dim] = gaussian_filter1d(
-                                std_trajectory[:, dim], 
-                                sigma=smoothing_sigma
-                            )
-                    
-                    # Create confidence band
-                    ax.fill_between(
-                        mean_trajectory[:, 0],
-                        mean_trajectory[:, 1] - std_trajectory[:, 1],
-                        mean_trajectory[:, 1] + std_trajectory[:, 1],
-                        color=color, alpha=0.2
-                    )
+                       alpha=0.9, zorder=10)
                 
                 # Mark start and end points
                 ax.scatter(mean_trajectory[0, 0], mean_trajectory[0, 1], 
                           color=color, s=150, marker='o', edgecolor='black', 
-                          linewidth=2, zorder=10)
+                          linewidth=2, zorder=15)
                 ax.scatter(mean_trajectory[-1, 0], mean_trajectory[-1, 1], 
                           color=color, s=150, marker='s', edgecolor='black', 
-                          linewidth=2, zorder=10)
-            
+                          linewidth=2, zorder=15)
             
             # Formatting
             ax.set_xlabel('PC 1')
@@ -392,7 +418,6 @@ def get_behavioral_conditions(signal: str, behavior_signal: np.ndarray) -> Tuple
     return conditions, colors
 
 
-
 def visualize_embeddings(config_path: str):
     """
     Create visualization plots from trained model
@@ -419,7 +444,7 @@ def visualize_embeddings(config_path: str):
     # Visualization parameters
     smoothing_sigma = viz_config.get('smoothing_sigma', 1.0)
     temporal_smoothing = viz_config.get('temporal_smoothing', None)
-    confidence_intervals = viz_config.get('confidence_intervals', True)
+    confidence_intervals = viz_config.get('confidence_intervals', False)
     
     # Construct paths
     model_dir = Path(save_dir) / experiment_name / session_id / model_type
@@ -460,7 +485,6 @@ def visualize_embeddings(config_path: str):
         correlation = np.corrcoef(choices, feedback)[0,1]
         print(f"Choice-Feedback correlation: {correlation}")
     
-
         # Crosstab analysis
         left_correct = np.sum((choices == -1) & (feedback == 1))
         left_error = np.sum((choices == -1) & (feedback == -1))
@@ -475,7 +499,6 @@ def visualize_embeddings(config_path: str):
         # Get embeddings
         embeddings = model.encode(neural_data, behavior_data)
         print(f"Embeddings shape: {embeddings.shape}")
-        
         
         # Ensure embeddings are in trial format (n_trials, n_timepoints, n_dims)
         if len(embeddings.shape) == 2:

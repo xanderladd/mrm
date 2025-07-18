@@ -26,7 +26,7 @@ try:
     from lfads_torch.datamodules import BasicDataModule
     from lfads_torch.modules import augmentations
     from lfads_torch.modules.priors import MultivariateNormal, AutoregressiveMultivariateNormal
-    from lfads_torch.modules.recons import Poisson, Gaussian
+    from lfads_torch.modules.recons import Poisson, Gaussian, MSE
     from lfads_torch.tuples import SessionBatch
     LFADS_AVAILABLE = True
 except ImportError:
@@ -160,7 +160,7 @@ class LFADSModel(BaseModel):
             datafile_pattern=h5_path,
             batch_size=self.batch_size,
         )
-        
+
         # Setup trainer
         with tempfile.TemporaryDirectory() as temp_dir:
             logger = CSVLogger(temp_dir, name="lfads_training")
@@ -238,7 +238,6 @@ class LFADSModel(BaseModel):
         # Convert to tensors
         neural_tensor = torch.FloatTensor(neural_data)
         ext_tensor = torch.FloatTensor(external_inputs)
-
         # Create session batch
         session_batch = SessionBatch(
             encod_data=neural_tensor,
@@ -265,8 +264,11 @@ class LFADSModel(BaseModel):
         
     def decode(self, latents: np.ndarray) -> np.ndarray:
         """
-        Decode latent factors to reconstructed neural data
-
+        Decode latent factors to reconstructed neural data.
+        
+        This method applies the LFADS readout layer to the provided latent factors
+        to generate reconstructed neural activity.
+        
         Args:
             latents: Shape (n_trials, n_timepoints, latent_dim) or (n_timepoints, latent_dim)
             
@@ -283,47 +285,119 @@ class LFADSModel(BaseModel):
             single_trial = True
             
         n_trials, n_timepoints, latent_dim = latents.shape
-        n_neurons = self.data_info['n_neurons']
-        n_ext_inputs = len(self.external_inputs)
-
-        # Convert latents to tensor
-        latents_tensor = torch.FloatTensor(latents)
-
-        # Create dummy external inputs (or use stored ones if available)
-        ext_inputs = torch.zeros(n_trials, n_timepoints, n_ext_inputs)
-
+        
+        # Validate latent dimensions
+        if latent_dim != self.latent_dim:
+            raise ValueError(f"Expected latent_dim={self.latent_dim}, got {latent_dim}")
+        
         # Get device of the model
         device = next(self.lfads_model.parameters()).device
-        latents_tensor = latents_tensor.to(device)
-        ext_inputs = ext_inputs.to(device)
-
+        
+        # Convert latents to tensor and move to device
+        latents_tensor = torch.FloatTensor(latents).to(device)
+        
         self.lfads_model.eval()
         with torch.no_grad():
-            # Access the generator directly to decode from latents
-            # This requires understanding the LFADS model structure
-            # Method 1: Try to use the readout layer directly
-            readout = self.lfads_model.readout[0]  # First (and usually only) readout
+            # Apply readout to get rates
+            # In LFADS, factors go through readout to produce rates
+            readout_layer = self.lfads_model.readout[0]  # First readout module
+           
+            rates = readout_layer(latents_tensor)  # Shape: (n_trials, n_timepoints, n_neurons)
             
-            # Apply readout to latents to get rates
-            rates = readout(latents_tensor)  # Shape: (n_trials, n_timepoints, n_neurons)
-            
-            # Convert rates to reconstruction based on distribution type
+            # Convert rates to reconstruction based on the distribution type
             if self.reconstruction_type == 'poisson':
-                # For Poisson, rates are the natural parameters
+                # For Poisson reconstruction, rates are the expected spike counts
+                # Apply exponential to ensure positive rates if not already done by readout
+                if hasattr(readout_layer, 'activation'):
+                    # If readout has activation, rates are already processed
+                    reconstructed = rates
+                else:
+                    # Apply softplus or exp to ensure positive rates
+                    reconstructed = torch.nn.functional.softplus(rates)
+            elif self.reconstruction_type == 'gaussian':
+                # For Gaussian reconstruction, use rates directly
                 reconstructed = rates
             else:
-                # For Gaussian, use rates directly
+                # Default: use rates as-is
                 reconstructed = rates
-                
-            
+        
         # Convert back to numpy
         reconstructed_np = reconstructed.cpu().numpy()
-
+        
         # Return single trial if input was single trial
         if single_trial:
             reconstructed_np = reconstructed_np[0]
             
         return reconstructed_np.astype(np.float32)
+
+    def decode_with_sampling(self, latents: np.ndarray, n_samples: int = 100) -> np.ndarray:
+        """
+        Decode latents with sampling for better estimates (especially for stochastic models).
+        
+        This provides a more robust decode by averaging over multiple samples,
+        which is particularly important if the model was trained with stochastic components.
+        
+        Args:
+            latents: Shape (n_trials, n_timepoints, latent_dim) or (n_timepoints, latent_dim)
+            n_samples: Number of samples to average over
+            
+        Returns:
+            reconstructed_data: Average reconstruction over samples
+        """
+        reconstructions = []
+        
+        for _ in range(n_samples):
+            # Add small noise to latents to account for posterior uncertainty
+            noise_scale = 0.01  # Small noise to avoid identical samples
+            noisy_latents = latents + np.random.normal(0, noise_scale, latents.shape)
+            reconstruction = self.decode(noisy_latents)
+            reconstructions.append(reconstruction)
+        
+        # Average over samples
+        mean_reconstruction = np.mean(reconstructions, axis=0)
+        return mean_reconstruction.astype(np.float32)
+
+    def get_reconstruction_rates(self, neural_data: np.ndarray, 
+                            behavior_data: Dict[str, np.ndarray] = None) -> np.ndarray:
+        """Get reconstruction rates using LFADS output_params"""
+        # Setup same as encode method
+        single_trial = False
+        if neural_data.ndim == 2:
+            neural_data = neural_data[np.newaxis]
+            single_trial = True
+        
+        n_trials, n_timepoints, n_neurons = neural_data.shape
+        
+        if behavior_data is not None:
+            external_inputs = self._extract_external_inputs(behavior_data, (n_trials, n_timepoints))
+        else:
+            external_inputs = np.zeros((n_trials, n_timepoints, len(self.external_inputs)))
+        
+        neural_tensor = torch.FloatTensor(neural_data)
+        ext_tensor = torch.FloatTensor(external_inputs)
+        
+        session_batch = SessionBatch(
+            encod_data=neural_tensor,
+            recon_data=neural_tensor,
+            ext_input=ext_tensor,
+            sv_mask=torch.ones_like(neural_tensor[..., 0:1]),
+            truth=torch.zeros_like(neural_tensor)
+        )
+        
+        self.lfads_model.eval()
+        with torch.no_grad():
+            batch_dict = {0: session_batch}
+            output = self.lfads_model(batch_dict)
+            
+            # Use output_params (rates) directly instead of factors
+            rates = output[0].output_params  # This should be the readout output
+            
+        rates_np = rates.cpu().numpy()
+        if single_trial:
+            rates_np = rates_np[0]
+            
+        return rates_np
+
         
     def predict(self, neural_data: np.ndarray, steps_ahead: int = 1, 
                 external_inputs: np.ndarray = None) -> np.ndarray:
@@ -559,6 +633,9 @@ class LFADSModel(BaseModel):
         # Choose reconstruction distribution
         if self.reconstruction_type == 'poisson':
             reconstruction = nn.ModuleList([Poisson()])
+        elif self.reconstruction_type.lower() == 'mse':
+            reconstruction = nn.ModuleList([MSE()])
+
         else:
             reconstruction = nn.ModuleList([Gaussian()])
         

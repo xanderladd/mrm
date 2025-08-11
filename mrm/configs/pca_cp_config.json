@@ -1,7 +1,7 @@
 {
   "experiment": {
     "name": "ibl_pca_analysis",
-    "session_id": "ebce500b-c530-47de-8cb1-963c552703ea",
+    "session_id": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe",
     "description": "PCA analysis of IBL session neural data with mean trajectories"
   },
   "dataset": {
@@ -14,38 +14,61 @@
       "post_time": 0.2,
       "bin_size": 0.005,
       "min_trial_length": 0.3,
-      "val_fraction": 0.15,
-      "test_fraction": 0.15,
+      "val_fraction": 0.1,
+      "test_fraction": 0.2,
       "random_seed": 42,
-      "use_cache": true
+      "use_cache": true,
+      "brain_regions": ["CP"],
+      "unit_quality_thresh": 0.5
     }
   },
   "model": {
     "type": "pca",
     "params": {
       "n_components": 32,
-      "fit_method": "trial_averaged"
+      "fit_method": null
+
     }
   },
   "save_dir": "D:/multi_region/outputs",
+  "analysis": {
+    "extract_latents": true,
+    "behavioral_decoding": true,
+    "dimensionality_analysis": true,
+    "trajectory_visualization": true,
+    "reconstruction_quality": true,
+    "split_by_behavior": {
+      "choice": [-1, 1],
+      "feedback_type": [-1, 1],
+      "stimulus_contrast": [0, 0.25, 0.5, 1.0],
+      "stimulus_position": ["left", "right", "no_stim"],  
+      "reaction_time_tertiles": true
+    }
+  },
   "visualization": {
-    "splits": ["test", "val"],
+    "latent_dims_to_plot": [0, 1, 2, 3, 4],
+    "max_trials_trajectory": 15,
+    "time_window": [-0.1, 0.3],
+    "acausal_smoothing": true,
+    "temporal_smoothing": 2,
     "behavioral_signals": [
       "choice",
       "feedback_type", 
       "stimulus_contrast_left",
       "stimulus_contrast_right",
+      "stimulus_position",  
       "reaction_time"
     ],
-    "smoothing_sigma": 1.0,
-    "temporal_smoothing": 0.5,
-    "confidence_intervals": true,
-    "max_trials_per_condition": 100,
-    "plot_settings": {
-      "dpi": 300,
-      "figsize": [10, 8],
-      "alpha": 0.7,
-      "point_size": 30
+    "trajectory_plots": {
+      "show_start_end_markers": true,
+      "show_velocity_vectors": false,
+      "color_by_time": false,
+      "separate_subplots_by_condition": true,
+      "group_by_stimulus_position": true  
+    },
+    "comparison_plots": {
+      "choice_vs_stimulus_position": true,  
+      "sensory_vs_decision_dynamics": true  
     }
   }
 }

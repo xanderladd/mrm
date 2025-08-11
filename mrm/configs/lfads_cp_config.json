@@ -1,6 +1,6 @@
 {
   "experiment": {
-    "name": "ibl_lfads_analysis",
+    "name": "ibl_lfads_regions",
     "session_id": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe", 
     "description": "LFADS with optimized parameters for IBL neural trajectory analysis"
   },
@@ -12,18 +12,20 @@
       "alignment_event": "stimOn_times",
       "pre_time": 0.1,
       "post_time": 0.2,
-      "bin_size": 0.005,
+      "bin_size": 0.01,
       "min_trial_length": 0.3,
       "val_fraction": 0.15,
       "test_fraction": 0.15,
       "random_seed": 42,
-      "use_cache": true
+      "use_cache": true,
+      "brain_regions": ["CP"],
+      "unit_quality_thresh": 0.5
     }
   },
   "model": {
     "type": "lfads",
     "params": {
-      "latent_dim": 32,
+      "latent_dim": 64,
       "generator_dim": 200,
       "controller_dim": 64,
       "ic_dim": 32,
@@ -31,15 +33,15 @@
       "ic_enc_dim": 64,
       "ci_enc_dim": 64,
       "ci_lag": 1,
-      "learning_rate": 0.001,
+      "learning_rate": 0.005,
       "max_epochs": 50,
-      "batch_size": 16,
+      "batch_size": 24,
       "external_inputs": ["cue"],
-      "reconstruction_type": "MSE",
+      "reconstruction_type": "poisson",
       "dropout_rate": 0.0,
       "variational": true,
       "ic_post_var_min": 1e-4,
-      "cell_clip": 20.0,
+      "cell_clip": 100.0,
       "loss_scale": 1.0,
       "recon_reduce_mean": true,
       "lr_scheduler": true,
@@ -52,9 +54,9 @@
       "weight_decay": 1e-5,
       "l2_start_epoch": 0,
       "l2_increase_epoch": 100,
-      "kl_start_epoch": 25,
+      "kl_start_epoch": 15,
       "kl_increase_epoch": 100,
-      "kl_ic_scale": 0.001,
+      "kl_ic_scale": 0.01,
       "kl_co_scale": 0.001,
       "l2_ic_enc_scale": 0,
       "l2_ci_enc_scale": 0,

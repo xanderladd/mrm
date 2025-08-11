@@ -11,7 +11,11 @@ import seaborn as sns
 from pathlib import Path
 from scipy.ndimage import gaussian_filter1d
 from typing import Dict, List, Optional, Tuple, Union
+plt.rcParams['svg.fonttype'] = 'none'
 
+import numpy as np
+import matplotlib.pyplot as plt
+from typing import Dict, Any
 # Import your existing framework components
 from mrm.trainer import load_trained_model
 from mrm.dataset import IBLDataset
@@ -233,8 +237,8 @@ def create_mean_trajectory_plots(
                             error_start = mean_pos - perp_vector * error_magnitude
                             error_end = mean_pos + perp_vector * error_magnitude
                             
-                            ax.plot([error_start[0], error_end[0]], [error_start[1], error_end[1]], 
-                                   color=color, alpha=0.6, linewidth=2, solid_capstyle='round')
+                            # ax.plot([error_start[0], error_end[0]], [error_start[1], error_end[1]], 
+                            #        color=color, alpha=0.6, linewidth=2, solid_capstyle='round')
                 
                 # Plot mean trajectory (on top of confidence visualization)
                 ax.plot(mean_trajectory[:, 0], mean_trajectory[:, 1], 
@@ -262,6 +266,9 @@ def create_mean_trajectory_plots(
         
         # Save figure
         save_path = output_dir / f"mean_trajectories_{signal}.png"
+        fig.savefig(save_path, dpi=300, bbox_inches='tight')
+
+        save_path = output_dir / f"mean_trajectories_{signal}.svg"
         fig.savefig(save_path, dpi=300, bbox_inches='tight')
         print(f"Saved to {save_path}")
     
@@ -395,6 +402,14 @@ def get_behavioral_conditions(signal: str, behavior_signal: np.ndarray) -> Tuple
             conditions = {'All': np.ones(len(behavior_signal), dtype=bool)}
             colors = {'All': '#1f77b4'}
             
+    elif signal == 'stimulus_position':
+        conditions = {
+            'left': behavior_signal == -1,
+            'right': behavior_signal == 1
+        }
+        colors = {'left': '#2ca02c', 'right': '#d62728'}
+        
+
     elif signal == 'reaction_time':
         # Bin reaction times
         valid_mask = ~np.isnan(behavior_signal)
@@ -417,6 +432,208 @@ def get_behavioral_conditions(signal: str, behavior_signal: np.ndarray) -> Tuple
         
     return conditions, colors
 
+def create_stimulus_position_variable(behavior_data: Dict[str, np.ndarray]) -> np.ndarray:
+    """Create stimulus position variable from left/right contrasts"""
+    
+    contrast_left = behavior_data.get('stimulus_contrast_left', np.full(len(behavior_data['choice']), np.nan))
+    contrast_right = behavior_data.get('stimulus_contrast_right', np.full(len(behavior_data['choice']), np.nan))
+    
+    # Create stimulus position: -1=left, 0=no_stim, 1=right
+    stimulus_position = np.zeros_like(contrast_left)
+    
+    for i in range(len(stimulus_position)):
+        if not np.isnan(contrast_left[i]) and contrast_left[i] > 0:
+            stimulus_position[i] = -1  # Left stimulus
+        elif not np.isnan(contrast_right[i]) and contrast_right[i] > 0:
+            stimulus_position[i] = 1   # Right stimulus
+        else:
+            stimulus_position[i] = 0   # No stimulus or unclear
+    
+    return stimulus_position
+
+def plot_stimulus_vs_choice_trajectories(latents: np.ndarray, 
+                                       behavior_data: Dict[str, np.ndarray],
+                                       time_vector: np.ndarray,
+                                       pc_dims: tuple = (0, 1)) -> plt.Figure:
+    """
+    Plot trajectories grouped by both stimulus position AND choice
+    This will show the key difference between sensory vs decision regions
+    """
+    
+    # Get behavioral variables
+    choices = behavior_data.get('choice', np.full(latents.shape[0], np.nan))
+    stimulus_position = create_stimulus_position_variable(behavior_data)
+    
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    # Define colors
+    left_choice_color = '#1f77b4'   # Blue
+    right_choice_color = '#ff7f0e'  # Orange
+    left_stim_color = '#2ca02c'     # Green  
+    right_stim_color = '#d62728'    # Red
+    
+    # Plot 1: Trajectories by Choice (Decision Variable)
+    for choice_val, color, label in [(-1, left_choice_color, 'Left Choice'), 
+                                     (1, right_choice_color, 'Right Choice')]:
+        choice_mask = choices == choice_val
+        if np.sum(choice_mask) > 0:
+            choice_latents = latents[choice_mask]
+            mean_traj = np.mean(choice_latents, axis=0)
+            
+            axes[0].plot(mean_traj[:, pc_dims[0]], mean_traj[:, pc_dims[1]], 
+                        color=color, linewidth=3, label=label, alpha=0.8)
+            axes[0].scatter(mean_traj[0, pc_dims[0]], mean_traj[0, pc_dims[1]], 
+                           color=color, s=100, marker='o', edgecolor='black')
+            axes[0].scatter(mean_traj[-1, pc_dims[0]], mean_traj[-1, pc_dims[1]], 
+                           color=color, s=100, marker='s', edgecolor='black')
+    
+    axes[0].set_title('Trajectories by Choice\n(Decision Variable)', fontsize=14, fontweight='bold')
+    axes[0].set_xlabel(f'PC {pc_dims[0]+1}')
+    axes[0].set_ylabel(f'PC {pc_dims[1]+1}')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+    
+    # Plot 2: Trajectories by Stimulus Position (Sensory Variable)
+    for stim_val, color, label in [(-1, left_stim_color, 'Left Stimulus'), 
+                                   (1, right_stim_color, 'Right Stimulus')]:
+        stim_mask = stimulus_position == stim_val
+        if np.sum(stim_mask) > 0:
+            stim_latents = latents[stim_mask]
+            mean_traj = np.mean(stim_latents, axis=0)
+            
+            axes[1].plot(mean_traj[:, pc_dims[0]], mean_traj[:, pc_dims[1]], 
+                        color=color, linewidth=3, label=label, alpha=0.8)
+            axes[1].scatter(mean_traj[0, pc_dims[0]], mean_traj[0, pc_dims[1]], 
+                           color=color, s=100, marker='o', edgecolor='black')
+            axes[1].scatter(mean_traj[-1, pc_dims[0]], mean_traj[-1, pc_dims[1]], 
+                           color=color, s=100, marker='s', edgecolor='black')
+    
+    axes[1].set_title('Trajectories by Stimulus Position\n(Sensory Variable)', fontsize=14, fontweight='bold')
+    axes[1].set_xlabel(f'PC {pc_dims[0]+1}')
+    axes[1].set_ylabel(f'PC {pc_dims[1]+1}')
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+    
+    # Plot 3: Combined - 4 conditions (stimulus x choice)
+    conditions = [
+        (-1, -1, left_stim_color, 'Left Stim → Left Choice'),
+        (-1, 1, 'purple', 'Left Stim → Right Choice'), 
+        (1, -1, 'orange', 'Right Stim → Left Choice'),
+        (1, 1, right_stim_color, 'Right Stim → Right Choice')
+    ]
+    
+    for stim_val, choice_val, color, label in conditions:
+        condition_mask = (stimulus_position == stim_val) & (choices == choice_val)
+        if np.sum(condition_mask) >= 3:  # Minimum trials
+            condition_latents = latents[condition_mask]
+            mean_traj = np.mean(condition_latents, axis=0)
+            
+            axes[2].plot(mean_traj[:, pc_dims[0]], mean_traj[:, pc_dims[1]], 
+                        color=color, linewidth=2, label=f'{label} (n={np.sum(condition_mask)})', alpha=0.8)
+            axes[2].scatter(mean_traj[0, pc_dims[0]], mean_traj[0, pc_dims[1]], 
+                           color=color, s=80, marker='o', edgecolor='black')
+            axes[2].scatter(mean_traj[-1, pc_dims[0]], mean_traj[-1, pc_dims[1]], 
+                           color=color, s=80, marker='s', edgecolor='black')
+    
+    axes[2].set_title('Combined: Stimulus × Choice\n(All Conditions)', fontsize=14, fontweight='bold')
+    axes[2].set_xlabel(f'PC {pc_dims[0]+1}')
+    axes[2].set_ylabel(f'PC {pc_dims[1]+1}')
+    axes[2].legend(fontsize=10)
+    axes[2].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    return fig
+
+def analyze_sensory_vs_decision_dynamics(cp_latents: np.ndarray, 
+                                       cp_behavior: Dict[str, np.ndarray],
+                                       vis_latents: np.ndarray,
+                                       vis_behavior: Dict[str, np.ndarray],
+                                       time_vector: np.ndarray) -> Dict[str, Any]:
+    """
+    Quantify the difference between sensory and decision processing
+    Returns metrics to support your hypothesis
+    """
+    
+    results = {}
+    
+    for region_name, latents, behavior in [('CP', cp_latents, cp_behavior), 
+                                          ('VIS', vis_latents, vis_behavior)]:
+        
+        choices = behavior.get('choice', np.full(latents.shape[0], np.nan))
+        stimulus_position = create_stimulus_position_variable(behavior)
+        
+        # Calculate choice selectivity over time
+        choice_selectivity = []
+        stim_selectivity = []
+        
+        for t in range(latents.shape[1]):
+            timepoint_data = latents[:, t, 0]  # Use PC1
+            
+            # Choice selectivity: how well can we separate left vs right choices?
+            left_choice_vals = timepoint_data[choices == -1]
+            right_choice_vals = timepoint_data[choices == 1]
+            
+            if len(left_choice_vals) > 0 and len(right_choice_vals) > 0:
+                choice_sep = np.abs(np.mean(left_choice_vals) - np.mean(right_choice_vals))
+                choice_selectivity.append(choice_sep)
+            else:
+                choice_selectivity.append(0)
+            
+            # Stimulus selectivity: how well can we separate left vs right stimuli?
+            left_stim_vals = timepoint_data[stimulus_position == -1]
+            right_stim_vals = timepoint_data[stimulus_position == 1]
+            
+            if len(left_stim_vals) > 0 and len(right_stim_vals) > 0:
+                stim_sep = np.abs(np.mean(left_stim_vals) - np.mean(right_stim_vals))
+                stim_selectivity.append(stim_sep)
+            else:
+                stim_selectivity.append(0)
+        
+        results[region_name] = {
+            'choice_selectivity': np.array(choice_selectivity),
+            'stimulus_selectivity': np.array(stim_selectivity),
+            'peak_choice_selectivity': np.max(choice_selectivity),
+            'peak_stimulus_selectivity': np.max(stim_selectivity),
+            'choice_selectivity_buildup': np.mean(choice_selectivity[-10:]) - np.mean(choice_selectivity[:5]),
+            'stimulus_selectivity_buildup': np.mean(stim_selectivity[-10:]) - np.mean(stim_selectivity[:5])
+        }
+    
+    return results
+
+def plot_selectivity_comparison(analysis_results: Dict[str, Any], 
+                               time_vector: np.ndarray) -> plt.Figure:
+    """Plot choice vs stimulus selectivity over time for both regions"""
+    
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Plot choice selectivity
+    for region in ['CP', 'VIS']:
+        if region in analysis_results:
+            axes[0].plot(time_vector, analysis_results[region]['choice_selectivity'], 
+                        label=f'{region}', linewidth=3, alpha=0.8)
+    
+    axes[0].set_title('Choice Selectivity Over Time\n(Evidence Accumulation Signature)', fontweight='bold')
+    axes[0].set_xlabel('Time (s)')
+    axes[0].set_ylabel('Choice Selectivity (PC1)')
+    axes[0].axvline(0, color='red', linestyle='--', alpha=0.5, label='Stimulus Onset')
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+    
+    # Plot stimulus selectivity
+    for region in ['CP', 'VIS']:
+        if region in analysis_results:
+            axes[1].plot(time_vector, analysis_results[region]['stimulus_selectivity'], 
+                        label=f'{region}', linewidth=3, alpha=0.8)
+    
+    axes[1].set_title('Stimulus Position Selectivity Over Time\n(Sensory Processing Signature)', fontweight='bold')
+    axes[1].set_xlabel('Time (s)')
+    axes[1].set_ylabel('Stimulus Selectivity (PC1)')
+    axes[1].axvline(0, color='red', linestyle='--', alpha=0.5, label='Stimulus Onset')
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    return fig
 
 def visualize_embeddings(config_path: str):
     """
@@ -468,7 +685,6 @@ def visualize_embeddings(config_path: str):
     print("Creating visualizations...")
     
     all_figures = {}
-    
     # Process each split
     for split in splits:
         print(f"\nProcessing {split} split...")
@@ -476,7 +692,8 @@ def visualize_embeddings(config_path: str):
         # Get data
         neural_data = dataset.get_neural_data(split)
         behavior_data = dataset.get_behavior_data(split)
-       
+        stimulus_position = create_stimulus_position_variable(behavior_data)
+        behavior_data['stimulus_position'] = stimulus_position
         # Check the behavioral correlation
         choices = behavior_data['choice']  # -1=left, 1=right
         feedback = behavior_data['feedback_type']  # -1=error, 1=correct

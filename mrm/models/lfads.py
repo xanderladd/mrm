@@ -604,7 +604,11 @@ class LFADSModel(BaseModel):
                 cue[right_mask] = 1.0
                 
                 ext_inputs[:, :, i] = cue[:, np.newaxis]
-                
+                pretrial_bins = int((.3 / .01 )*(0.1/.4))
+
+                ext_inputs[:,:pretrial_bins,:] = 0
+
+
             elif input_name == 'movement_onset':
                 # Binary signal for movement onset (simplified)
                 reaction_time = behavior_data.get('reaction_time', np.full(n_trials, np.nan))

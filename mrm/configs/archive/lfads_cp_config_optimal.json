@@ -1,0 +1,131 @@
+{
+  "experiment": {
+    "name": "ibl_lfads_analysis",
+    "session_id": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe", 
+    "description": "LFADS with optimized parameters for IBL neural trajectory analysis"
+  },
+  "dataset": {
+    "type": "ibl", 
+    "params": {
+      "eid": "6f36868f-5cc1-450c-82fa-6b9829ce0cfe",
+      "probe_selection": ["alf/probe01/pykilosort"],
+      "alignment_event": "stimOn_times",
+      "pre_time": 0.1,
+      "post_time": 0.2,
+      "bin_size": 0.005,
+      "min_trial_length": 0.3,
+      "val_fraction": 0.15,
+      "test_fraction": 0.15,
+      "random_seed": 42,
+      "use_cache": true
+    }
+  },
+  "model": {
+    "type": "lfads",
+    "params": {
+      "latent_dim": 32,
+      "generator_dim": 100,
+      "controller_dim": 64,
+      "ic_dim": 32,
+      "co_dim": 16,
+      "ic_enc_dim": 64,
+      "ci_enc_dim": 64,
+      "ci_lag": 1,
+      "learning_rate": 0.001,
+      "max_epochs": 100,
+      "batch_size": 32,
+      "external_inputs": ["cue"],
+      "reconstruction_type": "MSE",
+      "dropout_rate": 0.1,
+      "variational": true,
+      "ic_post_var_min": 1e-4,
+      "cell_clip": 5.0,
+      "loss_scale": 1.0,
+      "recon_reduce_mean": true,
+      "lr_scheduler": true,
+      "lr_stop": 1e-5,
+      "lr_decay": 0.95,
+      "lr_patience": 6,
+      "lr_adam_beta1": 0.9,
+      "lr_adam_beta2": 0.999,
+      "lr_adam_epsilon": 1e-8,
+      "weight_decay": 1e-5,
+      "l2_start_epoch": 0,
+      "l2_increase_epoch": 100,
+      "kl_start_epoch": 0,
+      "kl_increase_epoch": 100,
+      "kl_ic_scale": 0,
+      "kl_co_scale": 0,
+      "l2_ic_enc_scale": 0,
+      "l2_ci_enc_scale": 0,
+      "l2_gen_scale": 0,
+      "l2_con_scale": 0,
+      "use_cache": true,
+      "force_retrain": true
+    }
+  },
+  "save_dir": "D:/multi_region/outputs",
+  "analysis": {
+    "extract_latents": true,
+    "behavioral_decoding": true,
+    "dimensionality_analysis": true,
+    "trajectory_visualization": true,
+    "reconstruction_quality": true,
+    "trajectory_analysis": {
+      "compute_velocities": true,
+      "analyze_all_pc_pairs": true,
+      "pc_pairs_to_plot": [[0,1], [0,2], [1,2], [2,3], [3,4]],
+      "behavioral_distance_analysis": true
+    },
+    "regularization_monitoring": {
+      "track_kl_losses": true,
+      "track_reconstruction_loss": true,
+      "track_total_loss": true,
+      "save_loss_curves": true
+    },
+    "split_by_behavior": {
+      "choice": [-1, 1],
+      "feedback_type": [-1, 1],
+      "stimulus_contrast": [0, 0.25, 0.5, 1.0],
+      "reaction_time_tertiles": true
+    }
+  },
+  "visualization": {
+    "latent_dims_to_plot": [0, 1, 2, 3, 4],
+    "max_trials_trajectory": 15,
+    "time_window": [-0.1, 0.3],
+    "trajectory_plots": {
+      "show_start_end_markers": true,
+      "show_velocity_vectors": false,
+      "color_by_time": false,
+      "separate_subplots_by_condition": true
+    },
+    "diagnostic_plots": {
+      "reconstruction_quality_by_neuron": true,
+      "latent_variance_explained": true,
+      "loss_curves": true,
+      "behavioral_decoding_accuracy": true
+    },
+    "plot_settings": {
+      "dpi": 300,
+      "figsize": [15, 10],
+      "alpha": 0.8,
+      "linewidth": 2.5
+    }
+  },
+  "behavioral_supervision": {
+    "enabled": false,
+    "weight": 0.01,
+    "target_variables": ["choice", "feedback_type"],
+    "decoder_hidden_dim": 64
+  },
+  "comparison_models": {
+    "run_pca_baseline": true,
+    "pca_components": 48,
+    "run_multiple_seeds": [42, 123, 456],
+    "compare_regularization_levels": {
+      "kl_scales": [0.01, 0.1, 0.5, 1.0],
+      "test_each": false
+    }
+  }
+}

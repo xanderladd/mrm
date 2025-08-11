@@ -129,7 +129,7 @@ class PCAModel(BaseModel):
         
         return condition_data
         
-    def encode(self, neural_data: np.ndarray) -> np.ndarray:
+    def encode(self, neural_data: np.ndarray, behavior_data: Optional[Dict[str, np.ndarray]] = None) -> np.ndarray:
         """Encode neural data to PCA latent space"""
         if not self.is_fitted:
             raise ValueError("Model must be fitted before encoding")

@@ -124,6 +124,8 @@ class IBLDataset(NeuralDataset):
         # Cache settings
         self.use_cache = config.get('use_cache', True)
         self.cache_dir = config.get("cache_dir",  "D://multi_region//ibl/")
+        self.brain_regions = config.get("brain_regions",[])
+        self.unit_quality_thresh = config.get("unit_quality_thresh",1)
         
         # Data containers - populated during prepare()
         self.neural_data = {}  # split -> np.ndarray
@@ -308,22 +310,64 @@ class IBLDataset(NeuralDataset):
         if spikes is None or clusters is None:
             raise ValueError(f"Could not load spikes or clusters data for session {self.eid}")
         
-        # Continue with existing code for processing spikes...
         # Get unique cluster IDs from spikes data
         cluster_ids = np.unique(spikes.clusters)
-        
         # Get good clusters using quality metrics
         if hasattr(clusters, 'metrics') and hasattr(clusters.metrics, 'label'):
-            good_cluster_mask = clusters.metrics.label == 1
+            good_cluster_mask = clusters.metrics.label > self.unit_quality_thresh
             good_cluster_indices = np.where(good_cluster_mask)[0]
-            good_cluster_ids = good_cluster_indices
+            good_cluster_ids = cluster_ids[good_cluster_mask]
         else:
-            good_cluster_ids = cluster_ids
+            good_cluster_mask = np.ones_like(cluster_ids)
             print(f"    No quality metrics found, using all {len(good_cluster_ids)} clusters")
 
         # Filter for brain regions if specified
         if self.brain_regions:
-            print(f"    Brain region filtering requested but not fully implemented yet")
+            channels = one.load_object(self.eid, 'channels', collection=probe_collection if probe_spec else None)
+            # Get brain location IDs for each cluster
+            cluster_channel_ids = clusters.channels
+            
+            from iblatlas.regions import BrainRegions
+            brain_regions = BrainRegions()
+            channel_brain_ids = channels['brainLocationIds_ccf_2017']
+
+            # Map cluster channels to brain location IDs
+            cluster_brain_ids = channel_brain_ids[cluster_channel_ids]
+            
+            # Convert brain location IDs to region acronyms
+            cluster_regions = []
+            for brain_id in cluster_brain_ids:
+                if not np.isnan(brain_id):
+                    region_info = brain_regions.get(int(brain_id))
+
+                    if region_info:
+                        cluster_regions.append(region_info.acronym[0])
+                    else:
+                        cluster_regions.append('unknown')
+                else:
+                    cluster_regions.append('unknown')
+            
+            cluster_regions = np.array(cluster_regions)
+            
+            # Filter for target regions (partial string matching)
+            region_mask = np.zeros(len(cluster_regions), dtype=bool)
+            for target_region in self.brain_regions:
+                # Use partial matching (e.g., "VIS" matches "VISp", "VISl", etc.)
+                region_mask |= np.char.find(cluster_regions, target_region) >= 0
+
+            
+                        
+            
+            # Update cluster count
+            regions_found = np.unique(cluster_regions[region_mask])
+            
+            cluster_reg_mask = (good_cluster_mask) & (region_mask)
+            # Apply region filter to good_cluster_ids
+            good_cluster_ids = cluster_ids[cluster_reg_mask]
+        else:
+            # Apply region filter to good_cluster_ids
+            good_cluster_ids = cluster_ids[good_cluster_mask]
+    
         
         n_neurons = len(good_cluster_ids)
         print(f"    Using {n_neurons} good clusters out of {len(cluster_ids)} total")

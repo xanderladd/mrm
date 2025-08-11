@@ -1,0 +1,25 @@
+{
+  "model_type": "mp_rslds",
+  "cache_path": "cache/mprslds_fit_dmotor_rnn",
+  "model_params": {
+    "K": 5,
+    "D_evidence": 10,
+    "D_motor": 10,
+    "N_evidence": 64,
+    "N_motor": 64
+  },
+  "training_params": {
+    "num_iters": 25,
+    "num_init_restarts": 5,
+    "alpha": 0.25,
+    "method": "laplace_em",
+    "variational_posterior": "structured_meanfield",
+    "continuous_optimizer": "newton",
+    "initialize": true
+  },
+  "data_params": {
+    "n_trials": 100,
+    "noise_scale": 0.01,
+    "source_model": "motor_rnn"
+  }
+}

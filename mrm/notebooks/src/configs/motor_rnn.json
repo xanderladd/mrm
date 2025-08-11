@@ -1,0 +1,23 @@
+{
+  "model_type": "motor_rnn",
+  "cache_path": "cache/decision_motor_rnn",
+  "model_params": {
+    "evidence_hidden": 64,
+    "motor_hidden": 64,
+    "evidence_input": 2,
+    "comm_dim": 32
+  },
+  "training_params": {
+    "epochs": 100,
+    "batch_size": 32,
+    "lr": 0.001,
+    "weight_decay": 0.0001,
+    "max_lr": 0.005,
+    "use_scheduler": true
+  },
+  "data_params": {
+    "n_trials": 500,
+    "sequence_length": 30,
+    "task_type": "decision_motor"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "model_type": "mr_gnode",
+  "cache_path": "cache/mr_gnode_fit_dmotor_rnn",
+  "model_params": {
+    "N": 4,
+    "input_dim": 2,
+    "hidden_dim": 32,
+    "num_regions": 2,
+    "comm_dim": 16,
+    "tau_regions": 0.01,
+    "tau_comm": 0.01
+  },
+  "training_params": {
+    "epochs": 500,
+    "lr": 0.001,
+    "batch_size": 8,
+    "clip_grad_norm": 10.0
+  },
+  "data_params": {
+    "n_trials": 100,
+    "noise_scale": 0.01,
+    "source_model": "motor_rnn"
+  }
+}

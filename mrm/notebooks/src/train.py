@@ -12,6 +12,11 @@ from utils import (load_config, create_model, load_cached_model, save_model,
                    generate_task_data, extract_trajectories, plot_training_curves,
                    compute_r2)
 
+from models.cca_baseline import fit_cca  
+from models.rrr_baseline import fit_rrr
+
+
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def communication_loss(model, outputs, targets, comm_norm, comm_penalty=0.01):
@@ -494,6 +499,30 @@ def main():
         print(f"Final MSE: {metadata['final_mse']:.4f}")
         print(f"Final R²: {metadata['final_r2']:.3f}")
         print("="*50)
+    
+    elif config['model_type'] == 'cca':
+        model, metadata = fit_cca(config)
+        save_model(model, config['cache_path'], metadata)
+        
+        print("\n" + "="*50)
+        print(f"CCA Training complete!")
+        print(f"Final MSE: {metadata['mse']:.4f}")
+        print(f"Final R²: {metadata['r2']:.3f}")
+        print(f"Mean Canonical Correlation: {metadata['mean_correlation']:.3f}")
+        print("="*50)
+
+    elif config['model_type'] == 'rrr':
+        model, metadata = fit_rrr(config)
+        save_model(model, config['cache_path'], metadata)
+        
+        print("\n" + "="*50)
+        print(f"RRR Training complete!")
+        print(f"Final MSE: {metadata['mse']:.4f}")
+        print(f"Final R²: {metadata['r2']:.3f}")
+        print(f"Total Explained Variance: {metadata['total_explained_variance']:.3f}")
+        print(f"Effective Rank: {metadata['effective_rank']}")
+        print("="*50)
+
     
     print(f"\nModel saved to {config['cache_path']}")
     

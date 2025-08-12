@@ -6,6 +6,7 @@ import torch
 import pickle
 import os
 from tabulate import tabulate
+from sklearn.metrics import r2_score
 
 from utils import (load_config, create_model, compute_mse, compute_r2, plot_comparison)
 
@@ -31,6 +32,50 @@ def generate_common_test_data():
     trajectories = extract_trajectories(rnn_model, n_trials=40, noise_scale=.01)
     return trajectories
 
+
+def evaluate_cca(config, test_trajectories):
+    """Evaluate CCA baseline model"""
+    import pickle
+    
+    # Load trained model
+    model_path = os.path.join(config['cache_path'], 'model.pkl')
+    with open(model_path, 'rb') as f:
+        model = pickle.load(f)
+    
+    # Get test data
+    evidence_test = np.array(test_trajectories['evidence_states'])
+    motor_test = np.array(test_trajectories['motor_states'])
+    
+    # Predict
+    motor_pred = model.predict(evidence_test)
+    
+    return motor_pred, motor_test
+
+def evaluate_rrr(config, test_trajectories):
+    """Evaluate RRR baseline model"""
+    import pickle
+    
+    # Load trained model
+    model_path = os.path.join(config['cache_path'], 'model.pkl')
+    with open(model_path, 'rb') as f:
+        model = pickle.load(f)
+    
+    # Get test data
+    evidence_test = np.array(test_trajectories['evidence_states'])
+    motor_test = np.array(test_trajectories['motor_states'])
+    
+    # Predict
+    motor_pred = model.predict(evidence_test)
+    
+    # Handle delays if present - adjust both pred and targets consistently
+    if model.delay > 0:
+        motor_test_adjusted = motor_test[:, model.delay:, :]
+        motor_pred_adjusted = motor_pred[:, model.delay:, :]
+        return motor_pred_adjusted, motor_test_adjusted
+    else:
+        return motor_pred, motor_test
+
+
 def evaluate_model(config_path, test_trajectories):
     """Evaluate any model on the same test trajectories"""
     config = load_config(config_path)
@@ -43,7 +88,11 @@ def evaluate_model(config_path, test_trajectories):
     elif model_type == 'mp_rslds':
         return evaluate_mp_rslds(config, test_trajectories)
     elif model_type == 'mr_gnode':
-        return evaluate_mr_gnode(config, test_trajectories)
+        return evaluate_mr_gnode(config, test_trajectories)  
+    elif model_type == 'cca':
+        return evaluate_cca(config, test_trajectories)
+    elif model_type == 'rrr':
+        return evaluate_rrr(config, test_trajectories)
     else:
         raise ValueError(f"Unknown model type: {model_type}")
 
@@ -169,7 +218,10 @@ def count_parameters(config):
         p = config['model_params']
         return p['K'] * (p['D_evidence'] + p['D_motor']) * (p['N_evidence'] + p['N_motor'])
     else:
-        model = create_model(config)
+        try:
+            model = create_model(config)
+        except ValueError:
+            return 0
         return sum(p.numel() for p in model.parameters())
 
 def compare_models(config_paths):

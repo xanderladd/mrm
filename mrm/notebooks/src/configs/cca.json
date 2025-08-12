@@ -1,0 +1,13 @@
+{
+  "model_type": "cca",
+  "cache_path": "cache/cca_baseline",
+  "model_params": {
+    "n_components": 8,
+    "alpha": 0.0
+  },
+  "data_params": {
+    "n_trials": 100,
+    "noise_scale": 0.01,
+    "source_model": "motor_rnn"
+  }
+}

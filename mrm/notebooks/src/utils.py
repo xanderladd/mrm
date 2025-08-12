@@ -75,37 +75,29 @@ def load_cached_model(cache_path: str, model_class=None, config: Dict = None):
     
     return model, metadata, True
 
-def save_model(model, cache_path: str, metadata: Dict = None):
-    """Save model to cache"""
+def save_model(model, cache_path, metadata):
+    """Save model - handles both torch models and baseline models"""
+    import pickle
+    import torch
+    import json
+    
     os.makedirs(cache_path, exist_ok=True)
     
-    model_path = os.path.join(cache_path, "model.pt")
-    torch.save(model.state_dict(), model_path)
+    # Save metadata
+    with open(os.path.join(cache_path, 'metadata.json'), 'w') as f:
+        json.dump(metadata, f, indent=2)
     
-    if metadata:
-        # Convert numpy types to Python native types for JSON serialization
-        def convert_numpy(obj):
-            if isinstance(obj, np.ndarray):
-                return obj.tolist()
-            elif isinstance(obj, (np.float32, np.float64)):
-                return float(obj)
-            elif isinstance(obj, (np.int32, np.int64)):
-                return int(obj)
-            elif isinstance(obj, dict):
-                return {k: convert_numpy(v) for k, v in obj.items()}
-            elif isinstance(obj, list):
-                return [convert_numpy(v) for v in obj]
-            else:
-                return obj
-        
-        metadata = convert_numpy(metadata)
-        
-        meta_path = os.path.join(cache_path, "metadata.json")
-        with open(meta_path, 'w') as f:
-            json.dump(metadata, f, indent=2)
+    # Save model based on type
+    model_type = metadata.get('model_type', '')
     
-    print(f"Model saved to {cache_path}")
-
+    if model_type in ['cca', 'rrr']:
+        # Baseline models use pickle
+        with open(os.path.join(cache_path, 'model.pkl'), 'wb') as f:
+            pickle.dump(model, f)
+    else:
+        # Torch models use torch.save
+        torch.save(model.state_dict(), os.path.join(cache_path, 'model.pt'))
+        
 # Metrics
 def compute_mse(pred: np.ndarray, target: np.ndarray) -> float:
     """Compute mean squared error"""

@@ -29,7 +29,7 @@ def generate_common_test_data():
     rnn_model.load_state_dict(state_dict)
     
     # Generate test trajectories
-    trajectories = extract_trajectories(rnn_model, n_trials=40, noise_scale=.01)
+    trajectories = extract_trajectories(rnn_model, n_trials=20, noise_scale=.01)
     return trajectories
 
 
@@ -139,7 +139,7 @@ def evaluate_mp_rslds(config, test_trajectories):
     # Run inference to get reconstructions
     try:
         _, posterior = rslds.fit(test_states_flat, method="laplace_em", 
-                                initialize=False, num_iters=2)
+                                initialize=False, num_iters=4)
         reconstructions_flat = rslds.smooth(posterior.mean_continuous_states[0], test_states_flat)
     except:
         reconstructions_flat = rslds.smooth(test_states_flat, test_states_flat)

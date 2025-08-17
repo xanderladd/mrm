@@ -320,7 +320,7 @@ def train_mr_gnode_dynamic_comm(model, config):
                 loss, loss_components = communication_loss(model, outputs, batch_target, total_comm, comm_penalty)
                 
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)
                 optimizer.step()
                 scheduler.step()
                 

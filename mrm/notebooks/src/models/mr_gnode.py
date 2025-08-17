@@ -6,7 +6,7 @@ import numpy as np
 
 class MRgnODE_DynamicComm(nn.Module):
     def __init__(self, N=4, input_dim=2, tau_regions=0.01, hidden_dim=64, tau_comm=0.05, 
-                 num_regions=2, comm_dim=16, output_dim=2):
+                 num_regions=2, comm_dim=16, output_dim=2, comm_penalty=0.001):
         super().__init__()
         self.num_regions = num_regions
         self.region_dim = N // num_regions
@@ -14,7 +14,7 @@ class MRgnODE_DynamicComm(nn.Module):
         self.tau_regions = tau_regions
         self.tau_comm = tau_comm
         self.output_dim = output_dim
-        
+        self.comm_penalty = comm_penalty
         # Total state: regions + communication channels
         self.num_comm_channels = num_regions * (num_regions - 1)  # Bidirectional
         self.N_regions = N

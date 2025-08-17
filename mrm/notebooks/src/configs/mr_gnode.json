@@ -11,10 +11,12 @@
     "tau_comm": 0.01
   },
   "training_params": {
-    "epochs": 600,
+    "epochs": 150,
     "lr": 0.001,
-    "batch_size": 8,
-    "clip_grad_norm": 10.0
+    "batch_size": 32,
+    "clip_grad_norm": 10.0,
+    "comm_penalty": 0.001
+
   },
   "data_params": {
     "n_trials": 100,

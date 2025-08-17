@@ -8,23 +8,67 @@ from typing import Dict, Any, Tuple
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# Data generation
-def generate_task_data(batch_size: int, seq_len: int, task_type: str = 'decision_motor'):
-    """Generate task data for training"""
-    if task_type == 'decision_motor':
-        evidence = torch.randn(batch_size, seq_len, 2, device=device) * 0.3
-        evidence[:, 15:, :] += torch.randn(batch_size, 1, 2, device=device) * 0.5
+def generate_task_data(batch_size, sequence_length, coherence=0.8, noise_level=0.5):
+    """Generate evidence integration + reaching task data with confidence-modulated velocities"""
+    EVIDENCE_PHASE = 15
+    
+    # Random target direction for each trial (0=LEFT, 1=RIGHT)
+    targets = torch.randint(0, 2, (batch_size,), device=device)
+    
+    # Evidence streams (first 15 timesteps)
+    evidence = torch.zeros(batch_size, sequence_length, 2, device=device)
+    evidence[:, :EVIDENCE_PHASE, 0] = (1 - targets.float()).unsqueeze(1) * coherence + \
+                                      torch.randn(batch_size, EVIDENCE_PHASE, device=device) * noise_level
+    evidence[:, :EVIDENCE_PHASE, 1] = targets.float().unsqueeze(1) * coherence + \
+                                      torch.randn(batch_size, EVIDENCE_PHASE, device=device) * noise_level
+    
+    # True evidence integration
+    raw_int =  torch.cumsum(evidence[:, :, 1] - evidence[:, :, 0], dim=1)
+    true_integration = torch.tanh(raw_int)
+    # Compute confidence from evidence strength at decision time
+    confidence = torch.abs(raw_int[:, EVIDENCE_PHASE-1]) / 20 #torch.mean(torch.abs(raw_int[:, EVIDENCE_PHASE-1]))  # Confidence at end of evidence
+    confidence = torch.clamp(confidence, 0, 1.0)  # Keep speeds reasonable (0.2x to 1.0x)
+    # Target positions (same as before)
+    target_positions = torch.zeros(batch_size, sequence_length, 2, device=device)
+    target_velocities = torch.zeros(batch_size, sequence_length, 2, device=device)
+    
+    for i in range(batch_size):
+        if targets[i] == 0:  # LEFT reach
+            target_positions[i, :, 0] = -1.0
+        else:  # RIGHT reach  
+            target_positions[i, :, 0] = 1.0
+    
+    # Generate smooth noise for each trial (low-frequency variations)
+    smooth_noise = torch.zeros(batch_size, sequence_length, device=device)
+    for i in range(batch_size):
+        # Create smooth noise with random phase and frequency
+        t_vals = torch.linspace(0, 4*np.pi, sequence_length, device=device)
+        phase = torch.rand(1, device=device) * 2 * np.pi
+        freq_scale = 0.5 + torch.rand(1, device=device) * 1.0  # Random frequency
+        smooth_noise[i] = 0.4 * torch.sin(freq_scale * t_vals + phase)
+    
+    # Confidence-modulated velocity trajectories with smooth noise
+    for t in range(EVIDENCE_PHASE, sequence_length):
+        progress = (t - EVIDENCE_PHASE) / (sequence_length - EVIDENCE_PHASE)
+        base_vel = 0.5 * np.sin(np.pi * progress) if progress < 1.0 else 0.0
         
-        targets = torch.cumsum(evidence, dim=1) / 10
-        motor_targets = torch.tanh(targets)
-        
-        return {
-            'evidence': evidence,
-            'true_integration': targets.mean(dim=-1),
-            'target_velocities': motor_targets
-        }
-    else:
-        raise ValueError(f"Unknown task type: {task_type}")
+        for i in range(batch_size):
+            # Scale velocity by confidence and add smooth noise
+            modulated_vel = base_vel * confidence[i].item()
+            noise_vel = modulated_vel + smooth_noise[i, t].item()
+            
+            if targets[i] == 0:  # LEFT
+                target_velocities[i, t, 0] = -noise_vel
+            else:  # RIGHT
+                target_velocities[i, t, 0] = noise_vel
+    
+    return {
+        'evidence': evidence,
+        'targets': targets,
+        'true_integration': true_integration,
+        'target_positions': target_positions,
+        'target_velocities': target_velocities
+    }
 
 def extract_trajectories(model, n_trials: int = 20, noise_scale: float = 0):
     """Extract neural trajectories from trained model"""

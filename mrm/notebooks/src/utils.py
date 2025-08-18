@@ -99,27 +99,53 @@ def extract_trajectories(model, n_trials: int = 20, noise_scale: float = 0, seed
 
 # Model I/O
 def load_cached_model(cache_path: str, model_class=None, config: Dict = None):
-    """Load model from cache"""
-    model_path = os.path.join(cache_path, "model.pt")
+    """Fixed load_cached_model that handles both torch and pickle models"""
+    import pickle
+    
+    # Check for metadata
     meta_path = os.path.join(cache_path, "metadata.json")
+    metadata = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, 'r') as f:
+            metadata = json.load(f)
     
-    if not os.path.exists(model_path):
-        return None, None, False
+    model_type = metadata.get('model_type', '')
     
-    # Load metadata
-    with open(meta_path, 'r') as f:
-        metadata = json.load(f)
+    # Try pickle format first (baseline models)
+    pickle_path = os.path.join(cache_path, "model.pkl")
+    if os.path.exists(pickle_path):
+        try:
+            with open(pickle_path, 'rb') as f:
+                model = pickle.load(f)
+            return model, metadata, True
+        except Exception as e:
+            print(f"  Failed to load pickle model: {e}")
     
-    # Create model instance if class provided
-    if model_class and config:
-        model = model_class(**config['model_params'])
-        model.load_state_dict(torch.load(model_path, map_location=device))
-        model.to(device)
-    else:
-        model = torch.load(model_path, map_location=device)
+    # Try torch format (neural models)  
+    torch_path = os.path.join(cache_path, "model.pt")
+    if os.path.exists(torch_path):
+        try:
+            if model_class and config:
+                # Create model instance and load state dict
+                model = model_class(**config['model_params'])
+                state_dict = torch.load(torch_path, map_location=device)
+                
+                # Handle _orig_mod. prefix from torch compilation
+                if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
+                    state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+                
+                model.load_state_dict(state_dict)
+                model.to(device)
+                return model, metadata, True
+            else:
+                # Load full model (fallback)
+                model = torch.load(torch_path, map_location=device)
+                return model, metadata, True
+        except Exception as e:
+            print(f"  Failed to load torch model: {e}")
     
-    return model, metadata, True
-
+    return None, None, False
+    
 def save_model(model, cache_path, metadata):
     """Save model - handles both torch models and baseline models"""
     import pickle

@@ -1,4 +1,4 @@
-"""Cross-validation script for bidirectional neural dynamics models"""
+"""Cross-validation script for neural dynamics models"""
 import argparse
 import json
 import os
@@ -13,11 +13,12 @@ from utils import (load_config, create_model, load_cached_model, save_model,
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def create_cv_splits(n_folds=5, base_seed=42):
-    """Create deterministic CV splits"""
+    """Create deterministic CV splits using different seeds"""
     train_seeds = []
     test_seeds = []
     
     for fold in range(n_folds):
+        # Use different seeds for train and test to ensure independence
         train_seed = base_seed + fold * 1000
         test_seed = base_seed + fold * 1000 + 500
         train_seeds.append(train_seed)
@@ -32,100 +33,134 @@ def run_single_fold(model_config, motor_rnn, fold_idx, train_seed, test_seed,
     print(f"\n--- Fold {fold_idx} ---")
     print(f"Train seed: {train_seed}, Test seed: {test_seed}")
     
-    # Create model
+    # Create fresh model instance
     model = create_model(model_config)
     print(f"Created {model_config['model_type']} model")
     
-    # Extract training data
+    # Extract training data with train_seed
     print("  Extracting training trajectories...")
     train_trajectories = extract_trajectories(motor_rnn, 
                                             n_trials=train_trials,
                                             noise_scale=noise_scale,
                                             seed=train_seed)
     
+    # Fix data shapes to ensure consistency
+    evidence_states = train_trajectories['evidence_states']
+    motor_states = train_trajectories['motor_states']
+    
+    print(f"  Raw shapes: evidence {evidence_states.shape}, motor {motor_states.shape}")
+    
     train_data = {
-        'region_1': train_trajectories['evidence_states'],
-        'region_2': train_trajectories['motor_states']
+        'region_1': evidence_states,  # evidence -> region_1
+        'region_2': motor_states      # motor -> region_2
     }
     
-    print(f"  Train shapes: Region 1 {train_data['region_1'].shape}, Region 2 {train_data['region_2'].shape}")
+    print(f"  Fixed shapes: Region 1 {train_data['region_1'].shape}, Region 2 {train_data['region_2'].shape}")
+    print(f"  Extracted {len(train_trajectories['trial_info'])} training trajectories")
+    
+    # Set region info for unidirectional models
+    region_info = None
+    if model_config['model_type'] in ['cca', 'rrr']:
+        region_info = {'source': 'region_1', 'target': 'region_2'}
     
     # Train model
     print(f"  Training {model_config['model_type']} model...")
-    train_metadata = model.fit(train_data, **model_config['training_params'])
+    if region_info is not None:
+        train_metadata = model.fit(train_data, region_info=region_info, **model_config['training_params'])
+    else:
+        train_metadata = model.fit(train_data, **model_config['training_params'])
     
-    # Extract test data
+    # Extract test data with test_seed
     print("  Extracting test trajectories...")
     test_trajectories = extract_trajectories(motor_rnn,
                                            n_trials=test_trials,
                                            noise_scale=noise_scale,
                                            seed=test_seed)
     
+    # Fix test data shapes the same way
+    evidence_states_test = test_trajectories['evidence_states']
+    motor_states_test = test_trajectories['motor_states']
+    
+    print(f"  Raw test shapes: evidence {evidence_states_test.shape}, motor {motor_states_test.shape}")
+    
+    # Ensure evidence_states_test is 3D: [trials, time, features]
+    if evidence_states_test.ndim == 2:
+        evidence_states_test = evidence_states_test[:, :, np.newaxis]
+    elif evidence_states_test.ndim == 1:
+        n_trials = test_trials
+        seq_len = len(evidence_states_test) // n_trials
+        evidence_states_test = evidence_states_test.reshape(n_trials, seq_len, 1)
+    
+    # Ensure motor_states_test is 3D: [trials, time, features]
+    if motor_states_test.ndim == 2:
+        motor_states_test = motor_states_test[:, np.newaxis, :]
+    elif motor_states_test.ndim == 1:
+        n_trials = test_trials
+        seq_len = len(motor_states_test) // n_trials
+        motor_states_test = motor_states_test.reshape(n_trials, seq_len, 1)
+    
     test_data = {
-        'region_1': test_trajectories['evidence_states'],
-        'region_2': test_trajectories['motor_states']
+        'region_1': evidence_states_test,
+        'region_2': motor_states_test
     }
     
-    print(f"  Test shapes: Region 1 {test_data['region_1'].shape}, Region 2 {test_data['region_2'].shape}")
+    print(f"  Fixed test shapes: Region 1 {test_data['region_1'].shape}, Region 2 {test_data['region_2'].shape}")
+    print(f"  Extracted {len(test_trajectories['trial_info'])} test trajectories")
     
-    # Make bidirectional predictions
-    print("  Making bidirectional predictions...")
-    test_regions = [test_data['region_1'], test_data['region_2']]
-    predictions = model.predict(test_regions, region_ids=['region_1', 'region_2'])
+    # Make predictions on test data
+    print("  Making predictions...")
+    # Use standardized predict interface
     
-    # predictions = [pred_region_1, pred_region_2]
-    pred_region_1, pred_region_2 = predictions
+    # All models now use bidirectional prediction
+    all_regions = [test_data['region_1'], test_data['region_2']]
+    region_ids = ['region_1', 'region_2']
+    predictions_list = model.predict(all_regions, region_ids=region_ids)
+
+    # Extract predictions for both regions
+    region_1_pred, region_2_pred = predictions_list
+        
+    # Convert to numpy if needed
+    if hasattr(predictions, 'numpy'):
+        predictions = predictions.numpy()
     
-    # Compute metrics for both directions
-    # Handle delay if present
-    if hasattr(model, 'delay') and model.delay > 0:
-        true_1 = test_data['region_1'][:, model.delay:, :]
-        true_2 = test_data['region_2'][:, model.delay:, :]
-        pred_1_eval = pred_region_1[:, model.delay:, :]
-        pred_2_eval = pred_region_2[:, model.delay:, :]
-    else:
-        true_1 = test_data['region_1']
-        true_2 = test_data['region_2']
-        pred_1_eval = pred_region_1
-        pred_2_eval = pred_region_2
+    ground_truth = test_data['region_2']
+    import pdb; pdb.set_trace()
+    # Compute metrics
+    predictions_flat = predictions.flatten()
+    ground_truth_flat = ground_truth.flatten()
     
-    # Calculate metrics for both directions
-    mse_21 = compute_mse(true_1.flatten(), pred_1_eval.flatten())  # region_2 → region_1
-    mse_12 = compute_mse(true_2.flatten(), pred_2_eval.flatten())  # region_1 → region_2
-    r2_21 = compute_r2(true_1.flatten(), pred_1_eval.flatten())
-    r2_12 = compute_r2(true_2.flatten(), pred_2_eval.flatten())
+    test_mse = compute_mse(predictions_flat, ground_truth_flat)
+    test_r2 = compute_r2(predictions_flat, ground_truth_flat)
     
-    # Average metrics
-    test_mse = (mse_12 + mse_21) / 2
-    test_r2 = (r2_12 + r2_21) / 2
+    print(f"  Test MSE: {test_mse:.4f}, Test R²: {test_r2:.3f}")
     
-    print(f"  Test Region 1→2: MSE={mse_12:.4f}, R²={r2_12:.3f}")
-    print(f"  Test Region 2→1: MSE={mse_21:.4f}, R²={r2_21:.3f}")
-    print(f"  Test Average: MSE={test_mse:.4f}, R²={test_r2:.3f}")
-    
+    # Create fold metadata
     fold_metadata = {
         'fold_idx': fold_idx,
         'train_seed': train_seed,
         'test_seed': test_seed,
         'test_mse': float(test_mse),
         'test_r2': float(test_r2),
-        'test_mse_12': float(mse_12),
-        'test_mse_21': float(mse_21),
-        'test_r2_12': float(r2_12),
-        'test_r2_21': float(r2_21),
         'train_metadata': train_metadata,
-        'model_type': model_config['model_type']
+        'model_type': model_config['model_type'],
+        'data_shapes': {
+            'train_region_1': train_data['region_1'].shape,
+            'train_region_2': train_data['region_2'].shape,
+            'test_region_1': test_data['region_1'].shape,
+            'test_region_2': test_data['region_2'].shape,
+            'predictions': predictions.shape
+        }
     }
     
     return {
         'model': model,
         'predictions': predictions,
-        'ground_truth': [test_data['region_1'], test_data['region_2']],
+        'ground_truth': ground_truth,
         'metadata': fold_metadata
     }
 
 def main():
-    parser = argparse.ArgumentParser(description='Cross-validate bidirectional neural dynamics models')
+    parser = argparse.ArgumentParser(description='Cross-validate neural dynamics models')
     parser.add_argument('config', type=str, help='Path to config JSON file')
     parser.add_argument('--n-folds', type=int, default=5, help='Number of CV folds')
     parser.add_argument('--base-seed', type=int, default=42, help='Base seed for reproducible splits')

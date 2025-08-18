@@ -18,7 +18,7 @@
     "sequence_length": 30,
     "task_type": "decision_motor",
     "evidence_phase": 15,
-    "coherence": 0.8,
-    "noise_level": 0.5
+    "coherence": 0.3,
+    "noise_level": 0.7
   }
 }

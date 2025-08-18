@@ -158,19 +158,9 @@ class MPrSLDSWrapper:
             input_data = all_data
             
         else:
-            # Single tensor - assume this is evidence, need to pad with motor states
-            # For MP-rSLDS we need full state (evidence + motor) for reconstruction
-            # If only evidence is provided, we'll pad with zeros for motor dimensions
-            if hasattr(self, 'motor_dim'):
-                motor_dim = self.motor_dim
-            else:
-                # Infer from training data dimensions
-                motor_dim = data.shape[-1]  # Assume same size as evidence for now
+            raise NotImplementedError
             
-            # Pad with zeros for motor dimensions
-            motor_padding = np.zeros(data.shape[:-1] + (motor_dim,))
-            input_data = np.concatenate([data, motor_padding], axis=-1)
-        
+          
         # Normalize data
         data_norm = (input_data - self.data_mean) / self.data_std
         n_trials, n_time, n_dims = data_norm.shape
@@ -206,10 +196,8 @@ class MPrSLDSWrapper:
                 start_idx = end_idx
             return result
         else:
-            # Return only motor reconstruction for single tensor input
-            evidence_dim = data.shape[-1]
-            return preds[..., evidence_dim:]
-            
+            print(1/0)
+
     def get_discrete_states(self, data):
         """Get most likely discrete states"""
         if not self.fitted:

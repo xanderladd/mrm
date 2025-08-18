@@ -10,5 +10,6 @@
     "n_trials": 100,
     "noise_scale": 0.01,
     "source_model": "motor_rnn"
-  }
+  },
+  "training_params": {}
 }

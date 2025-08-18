@@ -197,7 +197,6 @@ class MRgnODE_DynamicComm(nn.Module):
         """
         # Partition state
         h_regions, h_comm = self.partition_state(h)
-        
         # Compute dynamics for each partition
         h_regions_dot = self.compute_region_dynamics(h_regions, x, h_comm)
         h_comm_dot = self.compute_comm_dynamics(h_regions, h_comm)
@@ -209,6 +208,229 @@ class MRgnODE_DynamicComm(nn.Module):
         comm_norm = torch.norm(h_comm)
         
         return h_dot, comm_norm
+    def predict(self, data, region_ids=None):
+        """Predict using MR-GNODE reconstruction
+        
+        Args:
+            data: Either single tensor [trials, time, features] or list of tensors
+            region_ids: List specifying region ordering if data is a list
+            
+        Returns:
+            Predictions in same format as input
+        """
+        import torch
+        
+        self.eval()
+        device = next(self.parameters()).device
+        dt = 0.01
+        
+        # Get dimensions from model
+        total_region_dims = self.num_regions * self.region_dim
+        
+        # Handle different input formats
+        if isinstance(data, list):
+            if region_ids is None:
+                raise ValueError("region_ids must be provided when data is a list")
+            
+            # Concatenate all regions - bidirectional reconstruction like in fit
+            all_data = np.concatenate(data, axis=-1) if isinstance(data[0], np.ndarray) else torch.cat(data, dim=-1)
+            
+            if not isinstance(all_data, torch.Tensor):
+                all_data = torch.tensor(all_data, dtype=torch.float32)
+            combined_data = all_data.to(device)  # [trials, time, total_region_dims]
+            
+        else:
+            # Single tensor input - assume this is evidence data, need to pad/handle
+            if not isinstance(data, torch.Tensor):
+                evidence = torch.tensor(data, dtype=torch.float32).to(device)
+            else:
+                evidence = data.to(device)
+            # For single input, we'd need motor data too for bidirectional - this case may not work
+            combined_data = evidence  # This won't work with total_region_dims expectation
+        
+        n_trials, seq_len, input_dims = combined_data.shape
+        all_preds = []
+        
+        with torch.no_grad():
+            for trial_idx in range(n_trials):
+                trial_data = combined_data[trial_idx:trial_idx+1]  # [1, time, total_region_dims]
+                
+                # Reshape to [batch, time, num_regions, region_dim] format like in fit
+                batch_input_reshaped = trial_data.view(1, seq_len, self.num_regions, self.region_dim)
+                
+                # Initialize state
+                h = torch.empty(1, self.N_total, device=device)
+                torch.nn.init.xavier_uniform_(h)
+                outputs = []
+                
+                for t in range(seq_len):
+                    h_dot, _ = self(h, batch_input_reshaped[:, t], timestep=t)
+                    h = h + dt * h_dot
+                    step_output = self.get_outputs(h)
+                    outputs.append(step_output)
+                
+                outputs = torch.stack(outputs, dim=1)  # [1, time, regions, output_dim]
+                
+                # Reshape to match target format [1, time, total_region_dims] like in fit
+                if outputs.shape[2] > 1:
+                    outputs = outputs.view(1, seq_len, -1)
+                else:
+                    outputs = outputs.squeeze(2)
+                
+                all_preds.append(outputs.squeeze(0).cpu().numpy())
+        
+        predictions = np.array(all_preds)  # [trials, time, total_region_dims]
+        
+        # Return in same format as input
+        if isinstance(data, list):
+            # Split back into regions using model dimensions
+            result = []
+            for i in range(self.num_regions):
+                start_idx = i * self.region_dim
+                end_idx = (i + 1) * self.region_dim
+                region_pred = predictions[..., start_idx:end_idx]
+                result.append(region_pred)
+            return result
+        else:
+            return predictions
+    def fit(self, train_data, region_info=None, **training_params):
+        """Fit MR-GNODE model using provided trajectory data"""
+        import torch.optim as optim
+        import torch.nn as nn
+        from tqdm import tqdm
+        from utils import compute_r2
+        
+        optimizer = optim.AdamW(self.parameters(), lr=training_params['lr'], weight_decay=1e-2)
+        
+        n_epochs = training_params['epochs']
+        batch_size = training_params['batch_size']
+        dt = training_params.get('dt', 0.01)
+        comm_penalty = training_params.get('comm_penalty', 0.01)
+        
+        # Get device from model parameters
+        device = next(self.parameters()).device
+        
+        # Prepare data from train_data  
+        evidence_states = np.array(train_data['region_1'])  # [trials, time, 64]
+        motor_states = np.array(train_data['region_2'])     # [trials, time, 64]
+        
+        # Convert to tensors
+        evidence_states = torch.tensor(evidence_states, dtype=torch.float32).to(device)
+        motor_states = torch.tensor(motor_states, dtype=torch.float32).to(device)
+        
+        print(f"  Training data shapes: evidence {evidence_states.shape}, motor {motor_states.shape}")
+        
+        # Setup scheduler
+        n_trials = evidence_states.shape[0]
+        steps_per_epoch = n_trials // batch_size + 1
+        scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=training_params['lr']*5, 
+                                                epochs=n_epochs, steps_per_epoch=steps_per_epoch)
+        
+        losses, train_mse_history, train_r2_history = [], [], []
+        
+        def communication_loss(model, outputs, targets, comm_norm, comm_penalty=0.01):
+            """Simplified loss function with communication penalty"""
+            mse_loss = nn.MSELoss()(outputs, targets)
+            comm_cost = comm_penalty * comm_norm
+            total_loss = mse_loss + comm_cost
+            return total_loss, {'mse': mse_loss.item(), 'comm_cost': comm_cost.item()}
+        
+        for epoch in tqdm(range(n_epochs), desc="Training MR-GNODE"):
+            epoch_loss = 0
+            all_preds, all_targets = [], []
+            
+            # Shuffle indices
+            indices = torch.randperm(n_trials)
+            
+            for i in range(0, n_trials, batch_size):
+                batch_indices = indices[i:i+batch_size]
+                
+                # Get batch - use FULL neural activity from both regions
+                batch_evidence = evidence_states[batch_indices]  # [batch, time, 64]
+                batch_motor = motor_states[batch_indices]        # [batch, time, 64]
+                
+                # Concatenate both regions as input - bidirectional reconstruction
+                batch_input = torch.cat([batch_evidence, batch_motor], dim=-1)  # [batch, time, 128]
+                
+                # Target is to reconstruct BOTH regions (full neural activity)
+                batch_target = torch.cat([batch_evidence, batch_motor], dim=-1)  # [batch, time, 128]
+                
+                optimizer.zero_grad()
+                
+                batch_size_actual, seq_len, input_dim = batch_input.shape
+                
+                # Format input for MR-GNODE: [batch, time, regions, channels]
+                # Reshape to [batch, time, 2, 64] for 2 regions with 64 channels each
+                batch_input_reshaped = batch_input.view(batch_size_actual, seq_len, 2, 64)
+                
+                # Initialize hidden state
+                h = torch.empty(batch_size_actual, self.N_total, device=device)
+                nn.init.xavier_uniform_(h)
+                outputs, total_comm = [], 0
+                
+                # Forward pass through time
+                for t in range(seq_len):
+                    h_dot, comm_norm = self(h, batch_input_reshaped[:, t], timestep=t)
+                    h = h + dt * h_dot
+                    total_comm += comm_norm
+                    step_output = self.get_outputs(h)
+                    outputs.append(step_output)
+                
+                outputs = torch.stack(outputs, dim=1)  # [batch, time, regions, output_dim]
+                
+                # Reshape outputs to match target format [batch, time, 128]
+                if outputs.shape[2] > 1:
+                    # Concatenate across regions: [batch, time, region1_dims + region2_dims]
+                    outputs = outputs.view(batch_size_actual, seq_len, -1)
+                else:
+                    outputs = outputs.squeeze(2)
+                
+                # Ensure output dims match target dims
+                if outputs.shape[-1] != batch_target.shape[-1]:
+                    import pdb; pdb.set_trace()
+                
+                # Compute loss
+                loss, loss_components = communication_loss(self, outputs, batch_target, total_comm, comm_penalty)
+                
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=10.0)
+                optimizer.step()
+                scheduler.step()
+                
+                epoch_loss += loss.item()
+                all_preds.append(outputs.detach().cpu().numpy())
+                all_targets.append(batch_target.detach().cpu().numpy())
+            
+            losses.append(epoch_loss / (n_trials // batch_size))
+            
+            # Compute metrics
+            all_preds = np.concatenate(all_preds, axis=0)
+            all_targets = np.concatenate(all_targets, axis=0)
+            train_mse = float(np.mean((all_preds - all_targets) ** 2))
+            train_r2 = float(compute_r2(all_preds.flatten(), all_targets.flatten()))
+            train_mse_history.append(train_mse)
+            train_r2_history.append(train_r2)
+            
+            if epoch % (n_epochs // 10) == 0:
+                print(f"Epoch {epoch}, Loss: {losses[-1]:.6f}, MSE: {train_mse:.4f}, R²: {train_r2:.3f}")
+        
+        self.eval()
+        
+        return {
+            'losses': losses,
+            'train_mse': train_mse_history,
+            'train_r2': train_r2_history,
+            'final_mse': train_mse_history[-1],
+            'final_r2': train_r2_history[-1],
+            'model_type': 'mr_gnode'
+        }
+ 
+
+
+    @property
+    def device(self):
+        """Get device of model parameters"""
+        return next(self.parameters()).device
         
 def generate_mr_flip_flop_data(n_trials, task_type='square', combine_method='sum',
                                trial_length=100, n_regions=2, n_channels=2):

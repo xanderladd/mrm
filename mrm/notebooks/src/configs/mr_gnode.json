@@ -2,16 +2,17 @@
   "model_type": "mr_gnode",
   "cache_path": "cache/mr_gnode_fit_dmotor_rnn",
   "model_params": {
-    "N": 4,
-    "input_dim": 2,
-    "hidden_dim": 64,
+    "N": 128,
+    "input_dim": 64,
+    "hidden_dim": 32,
     "num_regions": 2,
     "comm_dim": 32,
     "tau_regions": 0.01,
-    "tau_comm": 0.01
+    "tau_comm": 0.01,
+    "output_dim": 64
   },
   "training_params": {
-    "epochs": 150,
+    "epochs": 11,
     "lr": 0.001,
     "batch_size": 32,
     "clip_grad_norm": 10.0,

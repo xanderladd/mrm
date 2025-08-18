@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.cross_decomposition import CCA
 from sklearn.linear_model import Ridge
 from sklearn.metrics import r2_score
+import torch
 
 class CCABaseline:
     """Canonical Correlation Analysis baseline for multi-region modeling"""
@@ -12,51 +13,126 @@ class CCABaseline:
         self.n_components = params.get('n_components', 5)
         self.alpha = params.get('alpha', 0.0)  
         self.cca = CCA(n_components=self.n_components, scale=True)
-        self.ridge = Ridge(alpha=1.0)  # Linear mapping from X canonical to Y space
+        self.ridge = Ridge(alpha=.01)  # Linear mapping from X canonical to Y space
         self.fitted = False
         
-    def fit(self, source_data, target_data):
-        """Fit CCA model"""
-        # Flatten across trials and time
-        X = source_data.reshape(-1, source_data.shape[-1])
-        Y = target_data.reshape(-1, target_data.shape[-1])
+    def fit(self, train_data, region_info=None, **training_params):
+        """Fit single CCA model for bidirectional reconstruction"""
+        from sklearn.metrics import r2_score
         
-        # Remove mean
-        self.X_mean = np.mean(X, axis=0)
-        self.Y_mean = np.mean(Y, axis=0)
-        X_centered = X - self.X_mean
-        Y_centered = Y - self.Y_mean
+        region_1_data = train_data['region_1']  # [trials, time, region_dim]
+        region_2_data = train_data['region_2']  # [trials, time, region_dim]
         
-        # Fit CCA to find canonical components
-        self.cca.fit(X_centered, Y_centered)
+        print(f"  Training bidirectional CCA on shapes: {region_1_data.shape} ↔ {region_2_data.shape}")
         
-        # Transform to canonical space
-        X_c, Y_c = self.cca.transform(X_centered, Y_centered)
+        # Flatten for CCA
+        X1 = region_1_data.reshape(-1, region_1_data.shape[-1])
+        X2 = region_2_data.reshape(-1, region_2_data.shape[-1])
         
-        # Fit direct mapping from X canonical components to original Y space
-        self.ridge.fit(X_c, Y_centered)
+        # Center data
+        self.X1_mean = np.mean(X1, axis=0)
+        self.X2_mean = np.mean(X2, axis=0)
+        X1_centered = X1 - self.X1_mean
+        X2_centered = X2 - self.X2_mean
+
+
+        # Fit single CCA model for bidirectional mapping
+        self.cca.fit(X1_centered, X2_centered)
+        
+        # Get canonical components for both directions
+        X1_c, X2_c = self.cca.transform(X1_centered, X2_centered)
+        
+        # Train ridge regressions for both directions
+        print("  Training ridge regression: region_1_canonical → region_2_original")
+        self.ridge_1to2 = Ridge(alpha=1.0)
+        self.ridge_1to2.fit(X1_c, X2_centered)
+        
+        print("  Training ridge regression: region_2_canonical → region_1_original")
+        self.ridge_2to1 = Ridge(alpha=1.0)  
+        self.ridge_2to1.fit(X2_c, X1_centered)
         
         self.fitted = True
         
         # Store canonical correlations for analysis
-        self.train_corr = [np.corrcoef(X_c[:, i], Y_c[:, i])[0, 1] for i in range(self.n_components)]
+        self.train_corr = [np.corrcoef(X1_c[:, i], X2_c[:, i])[0, 1] for i in range(self.n_components)]
         
-    def predict(self, source_data):
-        """Predict target from source"""
+        # Evaluate bidirectional reconstruction
+        pred_list = self.predict([region_1_data, region_2_data], region_ids=['region_1', 'region_2'])
+        region_1_pred, region_2_pred = pred_list
+        
+        # Compute metrics for both regions
+        r1_flat = region_1_data.reshape(-1, region_1_data.shape[-1])
+        r2_flat = region_2_data.reshape(-1, region_2_data.shape[-1])
+        r1_pred_flat = region_1_pred.reshape(-1, region_1_pred.shape[-1])
+        r2_pred_flat = region_2_pred.reshape(-1, region_2_pred.shape[-1])
+        
+        # Individual region metrics
+        r1_mse = np.mean((r1_flat - r1_pred_flat)**2)
+        r2_mse = np.mean((r2_flat - r2_pred_flat)**2)
+        r1_r2 = r2_score(r1_flat, r1_pred_flat)
+        r2_r2 = r2_score(r2_flat, r2_pred_flat)
+        
+        # Combined metrics (like MR-GNODE)
+        target_combined = np.concatenate([r1_flat, r2_flat], axis=-1)
+        pred_combined = np.concatenate([r1_pred_flat, r2_pred_flat], axis=-1)
+        
+        combined_mse = np.mean((target_combined - pred_combined)**2)
+        combined_r2 = r2_score(target_combined, pred_combined)
+        
+        print(f"\n  Region 1 reconstruction: MSE={r1_mse:.4f}, R²={r1_r2:.3f}")
+        print(f"  Region 2 reconstruction: MSE={r2_mse:.4f}, R²={r2_r2:.3f}")
+        print(f"  Combined reconstruction: MSE={combined_mse:.4f}, R²={combined_r2:.3f}")
+        print(f"  Mean Canonical Correlation: {np.mean(self.train_corr):.3f}")
+        
+        return {
+            'mse': float(combined_mse),
+            'r2': float(combined_r2),
+            'region_1_mse': float(r1_mse),
+            'region_1_r2': float(r1_r2),
+            'region_2_mse': float(r2_mse), 
+            'region_2_r2': float(r2_r2),
+            'canonical_correlations': self.train_corr,
+            'mean_correlation': float(np.mean(self.train_corr)),
+            'model_type': 'cca',
+            'data_shapes': {
+                'region_1': region_1_data.shape,
+                'region_2': region_2_data.shape
+            }
+        }
+
+    def predict(self, data, region_ids=None):
+        """Predict using single CCA model bidirectionally with direct weight multiplication"""
         if not self.fitted:
             raise ValueError("Model must be fitted first")
             
-        X = source_data.reshape(-1, source_data.shape[-1])
-        X_centered = X - self.X_mean
-        
-        # Transform to canonical space
-        X_c = self.cca.transform(X_centered)
-        
-        # Predict Y using direct mapping
-        Y_pred_centered = self.ridge.predict(X_c)
-        Y_pred = Y_pred_centered + self.Y_mean
-        
-        return Y_pred.reshape(source_data.shape[:-1] + (-1,))
+        if isinstance(data, list):
+            region_1_data, region_2_data = data
+            
+            # Region 1 → Region 2
+            X1 = region_1_data.reshape(-1, region_1_data.shape[-1])
+            X1_centered = X1 - self.X1_mean
+            X1_c = X1_centered @ self.cca.x_weights_  # Direct transformation to canonical space
+            X2_pred_centered = self.ridge_1to2.predict(X1_c)
+            region_2_pred = (X2_pred_centered + self.X2_mean).reshape(region_2_data.shape)
+            
+            # Region 2 → Region 1  
+            X2 = region_2_data.reshape(-1, region_2_data.shape[-1])
+            X2_centered = X2 - self.X2_mean
+            X2_c = X2_centered @ self.cca.y_weights_  # Direct transformation to canonical space
+            X1_pred_centered = self.ridge_2to1.predict(X2_c)
+            region_1_pred = (X1_pred_centered + self.X1_mean).reshape(region_1_data.shape)
+            
+            return [region_1_pred, region_2_pred]
+            
+        else:
+            # Single input - assume region_1, predict region_2
+            X1 = data.reshape(-1, data.shape[-1])
+            X1_centered = X1 - self.X1_mean
+            X1_c = X1_centered @ self.cca.x_weights_
+            X2_pred_centered = self.ridge_1to2.predict(X1_c)
+            X2_pred = X2_pred_centered + self.X2_mean
+            return X2_pred.reshape(data.shape[:-1] + (-1,))
+
     
     def get_canonical_correlations(self):
         """Get canonical correlations"""
@@ -65,73 +141,3 @@ class CCABaseline:
 def create_cca_model(config):
     """Create CCA model from config"""
     return CCABaseline(config['model_params'])
-
-def fit_cca(config):
-    """Fit CCA model following MRM conventions using RNN trajectories"""
-    # Load RNN model and extract trajectories (same as other models)
-    from utils import extract_trajectories
-    from models.motor_rnn import MultiRegionRNN
-    from utils import load_config
-    import torch
-    
-    print("    Loading Motor RNN to extract trajectories...")
-    
-    # Use same device logic as other models
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # Load the motor_rnn model
-    rnn_config = load_config('configs/motor_rnn.json')
-    rnn_model = MultiRegionRNN(**rnn_config['model_params']).to(device)
-    
-    # Load RNN weights
-    rnn_path = os.path.join(rnn_config['cache_path'], 'model.pt')
-    if os.path.exists(rnn_path):
-        state_dict = torch.load(rnn_path, map_location=device)
-        if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
-            state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
-        rnn_model.load_state_dict(state_dict)
-    else:
-        raise ValueError("Motor RNN must be trained first! Run train_motor_rnn.py")
-    
-    # Extract trajectories
-    print("    Extracting trajectories from Motor RNN...")
-    trajectories = extract_trajectories(rnn_model, 
-                                      n_trials=config['data_params']['n_trials'],
-                                      noise_scale=config['data_params'].get('noise_scale', 0.01))
-    
-    # Convert to numpy arrays
-    evidence_data = np.array(trajectories['evidence_states'])  # [trials, time, features]
-    motor_data = np.array(trajectories['motor_states'])
-    
-    print(f"    Data shapes: Evidence {evidence_data.shape}, Motor {motor_data.shape}")
-    
-    # Create model
-    model = create_cca_model(config)
-    
-    # Fit model
-    model.fit(evidence_data, motor_data)
-    
-    # Evaluate
-    motor_pred = model.predict(evidence_data)
-    motor_flat = motor_data.reshape(-1, motor_data.shape[-1])
-    pred_flat = motor_pred.reshape(-1, motor_pred.shape[-1])
-    
-    mse = np.mean((motor_flat - pred_flat)**2)
-    r2 = r2_score(motor_flat, pred_flat)
-    
-    # Get canonical correlations
-    corrs = model.get_canonical_correlations()
-    
-    metadata = {
-        'mse': float(mse),
-        'r2': float(r2),
-        'canonical_correlations': corrs,
-        'mean_correlation': float(np.mean(corrs)) if corrs else 0.0,
-        'model_type': 'cca',
-        'data_shapes': {
-            'evidence': evidence_data.shape,
-            'motor': motor_data.shape
-        }
-    }
-    
-    return model, metadata

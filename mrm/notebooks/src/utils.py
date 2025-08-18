@@ -8,7 +8,7 @@ from typing import Dict, Any, Tuple
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-def generate_task_data(batch_size, sequence_length, coherence=0.8, noise_level=0.5):
+def generate_task_data(batch_size, sequence_length, coherence=0.8, noise_level=0.5, seed=0):
     """Generate evidence integration + reaching task data with confidence-modulated velocities"""
     EVIDENCE_PHASE = 15
     
@@ -70,14 +70,15 @@ def generate_task_data(batch_size, sequence_length, coherence=0.8, noise_level=0
         'target_velocities': target_velocities
     }
 
-def extract_trajectories(model, n_trials: int = 20, noise_scale: float = 0):
+def extract_trajectories(model, n_trials: int = 20, noise_scale: float = 0, seed=0):
     """Extract neural trajectories from trained model"""
     model.eval()
     trajectories = {'evidence_states': [], 'motor_states': [], 'trial_info': []}
     
     with torch.no_grad():
-        for _ in range(n_trials):
-            data = generate_task_data(1, 30)
+        for trial in range(n_trials):
+            if seed is not None: torch.manual_seed(seed + trial)
+            data = generate_task_data(1, 30, seed=seed)
             outputs = model(data['evidence'])
             
             # Add noise for variability
@@ -134,14 +135,14 @@ def save_model(model, cache_path, metadata):
     # Save model based on type
     model_type = metadata.get('model_type', '')
     
-    if model_type in ['cca', 'rrr']:
+    if model_type in ['cca', 'rrr', 'mp_rslds']:
         # Baseline models use pickle
         with open(os.path.join(cache_path, 'model.pkl'), 'wb') as f:
             pickle.dump(model, f)
     else:
         # Torch models use torch.save
         torch.save(model.state_dict(), os.path.join(cache_path, 'model.pt'))
-        
+              
 # Metrics
 def compute_mse(pred: np.ndarray, target: np.ndarray) -> float:
     """Compute mean squared error"""
@@ -203,18 +204,31 @@ def load_config(config_path: str) -> Dict:
     with open(config_path, 'r') as f:
         return json.load(f)
 
+
 def create_model(config: Dict):
-    """Create model instance from config"""
+    """Enhanced model factory function for all model types"""
     model_type = config['model_type']
+    model_params = config['model_params']
     
     if model_type == 'motor_rnn':
         from models.motor_rnn import MultiRegionRNN
-        return MultiRegionRNN(**config['model_params']).to(device)
+        return MultiRegionRNN(**model_params).to(device)
+    
     elif model_type == 'mr_gnode':
         from models.mr_gnode import MRgnODE_DynamicComm
-        return MRgnODE_DynamicComm(**config['model_params']).to(device)
+        return MRgnODE_DynamicComm(**model_params).to(device)
+    
     elif model_type == 'mp_rslds':
-        from models.mp_rslds import create_mp_rslds
-        return create_mp_rslds(config['model_params'])
+        from models.mp_rslds import MPrSLDSWrapper
+        return MPrSLDSWrapper(model_params)
+    
+    elif model_type == 'cca':
+        from models.cca_baseline import CCABaseline
+        return CCABaseline(model_params)
+    
+    elif model_type == 'rrr':
+        from models.rrr_baseline import RRRBaseline
+        return RRRBaseline(model_params)
+    
     else:
         raise ValueError(f"Unknown model type: {model_type}")

@@ -3,6 +3,8 @@ import os
 import numpy as np
 from sklearn.linear_model import Ridge
 from sklearn.metrics import r2_score
+import torch
+
 
 class RRRBaseline:
     """Reduced Rank Regression baseline for multi-region modeling"""
@@ -13,12 +15,22 @@ class RRRBaseline:
         self.delay = params.get('delay', 0)   # Time delay
         self.fitted = False
         
-    def fit(self, source_data, target_data):
-        """Fit RRR model
-        Args:
-            source_data: [trials, time, neurons_source] 
-            target_data: [trials, time, neurons_target]
-        """
+    def fit(self, train_data, region_info=None, **training_params):
+        """Fit RRR model to trajectory data"""
+        from sklearn.linear_model import Ridge
+        from sklearn.metrics import r2_score
+        
+        # Determine source and target from region_info
+        if region_info is None:
+            # Default: region_1 -> region_2
+            source_key, target_key = 'region_1', 'region_2'
+        else:
+            source_key = region_info['source']
+            target_key = region_info['target']
+        
+        source_data = train_data[source_key]  # [trials, time, features]
+        target_data = train_data[target_key]
+        
         # Apply time delay if specified
         if self.delay > 0:
             X = source_data[:, :-self.delay, :]
@@ -60,35 +72,128 @@ class RRRBaseline:
         self.components = V_k
         self.singular_values = s[:k]
         
-    def predict(self, source_data):
-        """Predict target from source using RRR mapping"""
+        # Evaluate on training data
+        motor_pred = self.predict(source_data)
+        
+        # Handle delay for evaluation
+        if self.delay > 0:
+            target_eval = target_data[:, self.delay:, :]
+            motor_pred_eval = motor_pred[:, self.delay:, :]
+        else:
+            target_eval = target_data
+            motor_pred_eval = motor_pred
+        
+        motor_flat = target_eval.reshape(-1, target_eval.shape[-1])
+        pred_flat = motor_pred_eval.reshape(-1, motor_pred_eval.shape[-1])
+        
+        mse = np.mean((motor_flat - pred_flat)**2)
+        r2 = r2_score(motor_flat, pred_flat)
+        
+        # Get explained variance ratio of components
+        total_var = np.sum(self.singular_values**2)
+        explained_var_ratio = (self.singular_values**2) / total_var
+        
+        print(f"\n  Final MSE: {mse:.4f}")
+        print(f"  Final R²: {r2:.3f}")
+        print(f"  Total Explained Variance: {np.sum(explained_var_ratio):.3f}")
+        print(f"  Effective Rank: {k}")
+        
+        return {
+            'mse': float(mse),
+            'r2': float(r2),
+            'explained_variance_ratio': explained_var_ratio.tolist(),
+            'total_explained_variance': float(np.sum(explained_var_ratio)),
+            'effective_rank': int(k),
+            'singular_values': self.singular_values.tolist(),
+            'model_type': 'rrr',
+            'data_shapes': {
+                'source': source_data.shape,
+                'target': target_data.shape
+            }
+        }
+
+
+    def predict(self, data, region_ids=None):
+        """Predict target from source using RRR mapping
+        
+        Args:
+            data: Either single tensor [trials, time, features] or list of tensors
+            region_ids: List specifying region ordering if data is a list
+            
+        Returns:
+            Predictions in same format as input
+        """
         if not self.fitted:
             raise ValueError("Model must be fitted first")
-            
-        # Apply same delay structure as training
-        if self.delay > 0:
-            X = source_data[:, :-self.delay, :]
-            pred_shape = source_data.shape[:-1]  # Keep original time dim
-            pred_shape = (pred_shape[0], pred_shape[1], self.W_rrr.shape[1])
-        else:
-            X = source_data
-            pred_shape = source_data.shape[:-1] + (self.W_rrr.shape[1],)
-            
-        X_flat = X.reshape(-1, X.shape[-1])
-        X_centered = X_flat - self.X_mean
         
-        # Predict using reduced rank weights
-        Y_pred = X_centered @ self.W_rrr + self.Y_mean
-        
-        if self.delay > 0:
-            # Pad with zeros for delayed timesteps
-            Y_reshaped = Y_pred.reshape(X.shape[:-1] + (-1,))
-            Y_full = np.zeros(pred_shape)
-            Y_full[:, self.delay:, :] = Y_reshaped
-            return Y_full
+        # Handle different input formats
+        if isinstance(data, list):
+            if region_ids is None:
+                raise ValueError("region_ids must be provided when data is a list")
+            
+            # Concatenate tensors according to region_ids ordering
+            all_data = torch.cat(data, dim=-1) if isinstance(data[0], torch.Tensor) else np.concatenate(data, axis=-1)
+            
+            # Apply delay if specified
+            if self.delay > 0:
+                X = all_data[:, :-self.delay, :]
+                pred_shape = all_data.shape
+            else:
+                X = all_data
+                pred_shape = all_data.shape
+                
+            X_flat = X.reshape(-1, X.shape[-1])
+            X_centered = X_flat - self.X_mean
+            
+            # Predict using reduced rank weights
+            Y_pred = X_centered @ self.W_rrr + self.Y_mean
+            
+            if self.delay > 0:
+                # Pad with zeros for delayed timesteps
+                Y_reshaped = Y_pred.reshape(X.shape[:-1] + (-1,))
+                Y_full = np.zeros(pred_shape)
+                Y_full[:, self.delay:, :] = Y_reshaped
+                predictions = Y_full
+            else:
+                predictions = Y_pred.reshape(pred_shape)
+            
+            # Split back into list format matching input
+            start_idx = 0
+            result = []
+            for tensor in data:
+                end_idx = start_idx + tensor.shape[-1]
+                result.append(predictions[..., start_idx:end_idx])
+                start_idx = end_idx
+            
+            return result
+            
         else:
-            return Y_pred.reshape(pred_shape)
-    
+            # Single tensor input - standard unidirectional prediction
+            # Apply same delay structure as training
+            if self.delay > 0:
+                X = data[:, :-self.delay, :]
+                pred_shape = data.shape[:-1]  # Keep original time dim
+                pred_shape = (pred_shape[0], pred_shape[1], self.W_rrr.shape[1])
+            else:
+                X = data
+                pred_shape = data.shape[:-1] + (self.W_rrr.shape[1],)
+                
+            X_flat = X.reshape(-1, X.shape[-1])
+            X_centered = X_flat - self.X_mean
+            
+            # Predict using reduced rank weights
+            Y_pred = X_centered @ self.W_rrr + self.Y_mean
+            
+            if self.delay > 0:
+                # Pad with zeros for delayed timesteps
+                Y_reshaped = Y_pred.reshape(X.shape[:-1] + (-1,))
+                Y_full = np.zeros(pred_shape)
+                Y_full[:, self.delay:, :] = Y_reshaped
+                return Y_full
+            else:
+                return Y_pred.reshape(pred_shape) 
+
+                
     def get_explained_variance_ratio(self):
         """Get explained variance ratio of components"""
         if not self.fitted:

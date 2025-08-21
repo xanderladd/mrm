@@ -293,7 +293,8 @@ class MRgnODE_DynamicComm(nn.Module):
             return result
         else:
             return predictions
-    def fit(self, train_data, region_info=None, **training_params):
+
+    def fit(self, train_data, targets={}, region_info=None, **training_params):
         """Fit MR-GNODE model using provided trajectory data"""
         import torch.optim as optim
         import torch.nn as nn
@@ -311,17 +312,23 @@ class MRgnODE_DynamicComm(nn.Module):
         device = next(self.parameters()).device
         
         # Prepare data from train_data  
-        evidence_states = np.array(train_data['region_1'])  # [trials, time, 64]
-        motor_states = np.array(train_data['region_2'])     # [trials, time, 64]
-        
+        region1_inp = np.array(train_data['region_1'])  # [trials, time, 64]
+        region2_inp = np.array(train_data['region_2'])     # [trials, time, 64]
         # Convert to tensors
-        evidence_states = torch.tensor(evidence_states, dtype=torch.float32).to(device)
-        motor_states = torch.tensor(motor_states, dtype=torch.float32).to(device)
-        
-        print(f"  Training data shapes: evidence {evidence_states.shape}, motor {motor_states.shape}")
+        region1_inp = torch.tensor(region1_inp, dtype=torch.float32).to(device)
+        region2_inp = torch.tensor(region2_inp, dtype=torch.float32).to(device)
+
+        if len(targets.keys()):
+            region1_targets =  torch.tensor( np.array(targets['region_1']), dtype=torch.float32).to(device)
+            region2_targets =  torch.tensor( np.array(targets['region_2']), dtype=torch.float32).to(device)
+        else:
+            region1_targets = region1_inp
+            region2_targets = region2_inp 
+
+        print(f"  Training data shapes: evidence {region1_inp.shape}, motor {region2_inp.shape}")
         
         # Setup scheduler
-        n_trials = evidence_states.shape[0]
+        n_trials = region1_inp.shape[0]
         steps_per_epoch = n_trials // batch_size + 1
         scheduler = optim.lr_scheduler.OneCycleLR(optimizer, max_lr=training_params['lr']*5, 
                                                 epochs=n_epochs, steps_per_epoch=steps_per_epoch)
@@ -346,14 +353,14 @@ class MRgnODE_DynamicComm(nn.Module):
                 batch_indices = indices[i:i+batch_size]
                 
                 # Get batch - use FULL neural activity from both regions
-                batch_evidence = evidence_states[batch_indices]  # [batch, time, 64]
-                batch_motor = motor_states[batch_indices]        # [batch, time, 64]
+                batch_reg1 = region1_inp[batch_indices]  # [batch, time, 64]
+                batch_reg2 = region2_inp[batch_indices]        # [batch, time, 64]
                 
                 # Concatenate both regions as input - bidirectional reconstruction
-                batch_input = torch.cat([batch_evidence, batch_motor], dim=-1)  # [batch, time, 128]
+                batch_input = torch.cat([batch_reg1, batch_reg2], dim=-1)  # [batch, time, 128]
                 
                 # Target is to reconstruct BOTH regions (full neural activity)
-                batch_target = torch.cat([batch_evidence, batch_motor], dim=-1)  # [batch, time, 128]
+                batch_target = torch.cat([region1_targets[batch_indices], region2_targets[batch_indices]], dim=-1)  # [batch, time, 128]
                 
                 optimizer.zero_grad()
                 

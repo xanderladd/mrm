@@ -97,78 +97,7 @@ def extract_trajectories(model, n_trials: int = 20, noise_scale: float = 0, seed
     
     return trajectories
 
-# Model I/O
-def load_cached_model(cache_path: str, model_class=None, config: Dict = None):
-    """Fixed load_cached_model that handles both torch and pickle models"""
-    import pickle
-    
-    # Check for metadata
-    meta_path = os.path.join(cache_path, "metadata.json")
-    metadata = {}
-    if os.path.exists(meta_path):
-        with open(meta_path, 'r') as f:
-            metadata = json.load(f)
-    
-    model_type = metadata.get('model_type', '')
-    
-    # Try pickle format first (baseline models)
-    pickle_path = os.path.join(cache_path, "model.pkl")
-    if os.path.exists(pickle_path):
-        try:
-            with open(pickle_path, 'rb') as f:
-                model = pickle.load(f)
-            return model, metadata, True
-        except Exception as e:
-            print(f"  Failed to load pickle model: {e}")
-    
-    # Try torch format (neural models)  
-    torch_path = os.path.join(cache_path, "model.pt")
-    if os.path.exists(torch_path):
-        try:
-            if model_class and config:
-                # Create model instance and load state dict
-                model = model_class(**config['model_params'])
-                state_dict = torch.load(torch_path, map_location=device)
-                
-                # Handle _orig_mod. prefix from torch compilation
-                if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
-                    state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
-                
-                model.load_state_dict(state_dict)
-                model.to(device)
-                return model, metadata, True
-            else:
-                # Load full model (fallback)
-                model = torch.load(torch_path, map_location=device)
-                return model, metadata, True
-        except Exception as e:
-            print(f"  Failed to load torch model: {e}")
-    
-    return None, None, False
-    
-def save_model(model, cache_path, metadata):
-    """Save model - handles both torch models and baseline models"""
-    import pickle
-    import torch
-    import json
-    
-    os.makedirs(cache_path, exist_ok=True)
-    
-    # Save metadata
-    with open(os.path.join(cache_path, 'metadata.json'), 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    # Save model based on type
-    model_type = metadata.get('model_type', '')
-    
-    if model_type in ['cca', 'rrr', 'mp_rslds']:
-        # Baseline models use pickle
-        with open(os.path.join(cache_path, 'model.pkl'), 'wb') as f:
-            pickle.dump(model, f)
-    else:
-        # Torch models use torch.save
-        torch.save(model.state_dict(), os.path.join(cache_path, 'model.pt'))
-              
+
 # Metrics
 def compute_mse(pred: np.ndarray, target: np.ndarray) -> float:
     """Compute mean squared error"""
@@ -256,5 +185,84 @@ def create_model(config: Dict):
         from models.rrr_baseline import RRRBaseline
         return RRRBaseline(model_params)
     
+    elif model_type == 'kalman_filter':  # ADD THIS
+        from models.kalman_filter import KalmanFilterBaseline
+        return KalmanFilterBaseline(model_params)
+    
     else:
         raise ValueError(f"Unknown model type: {model_type}")
+
+# Model I/O
+def load_cached_model(cache_path: str, model_class=None, config: Dict = None):
+    """Fixed load_cached_model that handles both torch and pickle models"""
+    import pickle
+    
+    # Check for metadata
+    meta_path = os.path.join(cache_path, "metadata.json")
+    metadata = {}
+    if os.path.exists(meta_path):
+        with open(meta_path, 'r') as f:
+            metadata = json.load(f)
+    
+    model_type = metadata.get('model_type', '')
+    
+    # Try pickle format first (baseline models)
+    pickle_path = os.path.join(cache_path, "model.pkl")
+    if os.path.exists(pickle_path):
+        try:
+            with open(pickle_path, 'rb') as f:
+                model = pickle.load(f)
+            return model, metadata, True
+        except Exception as e:
+            print(f"  Failed to load pickle model: {e}")
+    
+    # Try torch format (neural models)  
+    torch_path = os.path.join(cache_path, "model.pt")
+    if os.path.exists(torch_path):
+        try:
+            if model_class and config:
+                # Create model instance and load state dict
+                model = model_class(**config['model_params'])
+                state_dict = torch.load(torch_path, map_location=device)
+                
+                # Handle _orig_mod. prefix from torch compilation
+                if any(k.startswith('_orig_mod.') for k in state_dict.keys()):
+                    state_dict = {k.replace('_orig_mod.', ''): v for k, v in state_dict.items()}
+                
+                model.load_state_dict(state_dict)
+                model.to(device)
+                return model, metadata, True
+            else:
+                # Load full model (fallback)
+                model = torch.load(torch_path, map_location=device)
+                return model, metadata, True
+        except Exception as e:
+            print(f"  Failed to load torch model: {e}")
+    
+    return None, None, False
+
+
+
+def save_model(model, cache_path, metadata):
+    """Save model - handles both torch models and baseline models"""
+    import pickle
+    import torch
+    import json
+    
+    os.makedirs(cache_path, exist_ok=True)
+    
+    # Save metadata
+    with open(os.path.join(cache_path, 'metadata.json'), 'w') as f:
+        json.dump(metadata, f, indent=2)
+    
+    # Save model based on type
+    model_type = metadata.get('model_type', '')
+    
+    if model_type in ['cca', 'rrr', 'mp_rslds', 'kalman_filter']:
+        # Baseline models use pickle
+        with open(os.path.join(cache_path, 'model.pkl'), 'wb') as f:
+            pickle.dump(model, f)
+    else:
+        # Torch models use torch.save
+        torch.save(model.state_dict(), os.path.join(cache_path, 'model.pt'))
+              

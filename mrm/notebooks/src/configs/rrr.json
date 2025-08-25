@@ -4,11 +4,11 @@
   "model_params": {
     "rank": 10,
     "alpha": 1.0,
-    "delay": 1
+    "delay": 0
   },
   "data_params": {
     "n_trials": 100,
-    "noise_scale": 0.01,
+    "noise_scale": 0.025,
     "source_model": "motor_rnn"
   },
   "training_params": {}

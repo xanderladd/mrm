@@ -18,6 +18,6 @@ python cross_validate.py configs/mp_rslds.json --n-folds 5 --train-trials 80 --t
 python cross_validate.py configs/rrr.json --n-folds 5 --train-trials 80 --test-trials 20 --force
 python cross_validate.py configs/kalman_filter.json --n-folds 5 --train-trials 80 --test-trials 20 --force
 
-python robust_cross_validate.py configs/robust_mr_gnode.json --n-folds 5 --train-trials 80 --test-trials 20 --force
-python robust_cross_validate.py configs/robust_rrr.json --n-folds 5 --train-trials 80 --test-trials 20 --force
-python robust_cross_validate.py configs/robust_kalman_filter.json --n-folds 5 --train-trials 80 --test-trials 20 --force
+# python robust_cross_validate.py configs/robust_mr_gnode.json --n-folds 5 --train-trials 80 --test-trials 20 --force
+# python robust_cross_validate.py configs/robust_rrr.json --n-folds 5 --train-trials 80 --test-trials 20 --force
+# python robust_cross_validate.py configs/robust_kalman_filter.json --n-folds 5 --train-trials 80 --test-trials 20 --force

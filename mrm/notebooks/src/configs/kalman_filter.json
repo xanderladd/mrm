@@ -9,7 +9,7 @@
   },
   "data_params": {
     "n_trials": 100,
-    "noise_scale": 0.01,
+    "noise_scale": 0.025,
     "source_model": "motor_rnn"
   }
 }

@@ -172,8 +172,7 @@ def main():
     os.makedirs(cv_cache_path, exist_ok=True)
     fold_results = []
     
-    # NO POINT IN ADDING NOISE FOR RECONSTRUCTION
-    noise_scale = 0 #config['data_params'].get('noise_scale', 0.01)
+    noise_scale = config['data_params'].get('noise_scale', 0.01)
     
     for fold_idx in range(args.n_folds):
         fold_result = run_single_fold(

@@ -1,0 +1,61 @@
+{
+    "experiment_name": "ibl_multiregion_visp_motor",
+    "cache_path": "cache/ibl_multiregion",
+    "ibl_params": {
+      "eid": "113c5b6c-940e-4b21-b462-789b4c2be0e5",
+      "probe_selection": "alf/probe00/pykilosort",
+      "alignment_event": "movement_times",
+      "pre_time": 0.2,
+      "post_time": 0.3,
+      "bin_size": 0.05,
+      "min_trial_length": 0.3,
+      "brain_regions": [
+        "MOs",
+        "MOp",
+        "CP"
+      ],
+      "val_fraction": 0.15,
+      "test_fraction": 0.15,
+      "random_seed": 7,
+      "use_cache": false,
+      "cache_dir": "D://multi_region//ibl/",
+      "unit_quality_thresh": 0.63
+    },
+    "region_mapping": {
+      "region_1": [
+        "MOp"
+      ],
+      "region_2": [
+        "MOs"
+      ]
+    },
+    "model_params": {
+      "hidden_dim": 32,
+      "comm_dim": 32,
+      "tau_regions": 0.01,
+      "tau_comm": 0.01,
+      "comm_penalty": 0,
+      "region_dims": [
+        32,
+        32
+      ],
+      "input_dims": [
+        162,
+        46
+      ],
+      "output_dims": [
+        162,
+        46
+      ],
+      "hidden_state_init": "zeros",
+      "num_regions": 2
+    },
+    "training_params": {
+      "epochs": 100,
+      "batch_size": 32,
+      "lr": 0.001,
+      "comm_penalty": 0,
+      "clip_grad_norm": 10.0,
+      "dt": 0.01
+    }
+  }

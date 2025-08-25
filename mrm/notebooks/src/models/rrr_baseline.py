@@ -52,34 +52,49 @@ class RRRBaseline:
             'components': V_k
         }
     
-    def fit(self, train_data, region_info=None, **training_params):
-        """Train bidirectional RRR models"""
-        region_1 = train_data['region_1']
-        region_2 = train_data['region_2']
+    def fit(self, train_data, targets={}, region_info=None, **training_params):
+        """Fit RRR with optional denoising targets"""
         
-        print(f"  Training region_1 → region_2...")
-        self.model_12 = self._fit_single_direction(region_1, region_2)
+        # Use targets if provided (denoising), else standard reconstruction
+        if len(targets.keys()):
+            clean_data = targets
+            print(f"  Training RRR with denoising")
+        else:
+            clean_data = train_data
+            print(f"  Training RRR standard")
         
-        print(f"  Training region_2 → region_1...")
-        self.model_21 = self._fit_single_direction(region_2, region_1)
+        input_data = train_data
         
+        # Fit both directions: input -> clean targets
+        self.model_12 = self._fit_single_direction(
+            input_data['region_1'], clean_data['region_2']
+        )
+        self.model_21 = self._fit_single_direction(
+            input_data['region_2'], clean_data['region_1']
+        )
+                
         self.fitted = True
         
-        # Evaluate both directions
-        pred_2 = self._predict_single(region_1, self.model_12, region_2.shape)
-        pred_1 = self._predict_single(region_2, self.model_21, region_1.shape)
+        # Evaluate: predict from input_data, compare to clean_data
+        region_1_clean = clean_data['region_1']
+        region_2_clean = clean_data['region_2']
+        
+        pred_2 = self._predict_single(input_data['region_1'], self.model_12, region_2_clean.shape)
+        pred_1 = self._predict_single(input_data['region_2'], self.model_21, region_1_clean.shape)
         
         # Handle delay for evaluation
         if self.delay > 0:
-            region_1_eval = region_1[:, self.delay:, :]
-            region_2_eval = region_2[:, self.delay:, :]
+            region_1_eval = region_1_clean[:, self.delay:, :]
+            region_2_eval = region_2_clean[:, self.delay:, :]
             pred_1_eval = pred_1[:, self.delay:, :]
             pred_2_eval = pred_2[:, self.delay:, :]
         else:
-            region_1_eval, region_2_eval = region_1, region_2
-            pred_1_eval, pred_2_eval = pred_1, pred_2
+            region_1_eval = region_1_clean
+            region_2_eval = region_2_clean
+            pred_1_eval = pred_1
+            pred_2_eval = pred_2
         
-        # Calculate metrics
+        # Calculate metrics against clean targets
         mse_12 = np.mean((region_2_eval.flatten() - pred_2_eval.flatten())**2)
         mse_21 = np.mean((region_1_eval.flatten() - pred_1_eval.flatten())**2)
         r2_12 = r2_score(region_2_eval.flatten(), pred_2_eval.flatten())
@@ -99,7 +114,7 @@ class RRRBaseline:
             'mse_21': float(mse_21),
             'r2_12': float(r2_12),
             'r2_21': float(r2_21),
-            'model_type': 'bidirectional_rrr',
+            'model_type': 'rrr',
             'effective_rank': self.rank
         }
     
@@ -144,7 +159,7 @@ class RRRBaseline:
 
 def create_rrr_model(config):
     """Create bidirectional RRR model"""
-    return BidirectionalRRR(config['model_params'])
+    return RRRBaseline(config['model_params'])
 
 def fit_rrr(config):
     """Fit bidirectional RRR model"""

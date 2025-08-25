@@ -2,13 +2,14 @@
   "model_type": "rrr",
   "cache_path": "cache/rrr_baseline",
   "model_params": {
-    "rank": 10,
-    "alpha": 1.0,
+    "rank": 16,
+    "alpha": 0.2,
     "delay": 0
   },
   "data_params": {
     "n_trials": 100,
-    "noise_scale": 0.025,
+    "noise_scale": 0.1,
+    "mask_ratio": 0.1,
     "source_model": "motor_rnn"
   },
   "training_params": {}

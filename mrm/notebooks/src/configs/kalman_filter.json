@@ -1,0 +1,15 @@
+{
+  "model_type": "kalman_filter",
+  "cache_path": "cache/kalman_filter",
+  "model_params": {
+    "n_latent": 20
+  },
+  "training_params": {
+    "n_iter": 30
+  },
+  "data_params": {
+    "n_trials": 100,
+    "noise_scale": 0.025,
+    "source_model": "motor_rnn"
+  }
+}
